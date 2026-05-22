@@ -123,3 +123,10 @@ until adb shell getprop sys.boot_completed 2>/dev/null | grep -q "1"; do
 done
 echo "Device ready!"
 ```
+
+### 12. Install scrcpy
+```bash!
+cd /tmp2/$USER/DRL_final_workspace
+wget https://github.com/Genymobile/scrcpy/releases/download/v4.0/scrcpy-linux-x86_64-v4.0.tar.gz
+tar -xvf scrcpy-linux-x86_64-v4.0.tar.gz
+```
