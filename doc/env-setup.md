@@ -85,6 +85,8 @@ until adb shell getprop sys.boot_completed 2>/dev/null | grep -q "1" && \
 done
 echo "Ready! Installing..."
 adb install ~/Desktop/BBBall-RL/assets/Bouncy_Basketball.apk
+echo "Setting resolution..."
+adb shell wm size 540x1170
 ```
 
 The apk is downloaded from: https://l.messenger.com/l.php?u=https%3A%2F%2Fd.apkpure.com%2Fb%2FAPK%2Fcom.DreamonStudios.BouncyBasketball%3FversionCode%3D16%26nc%3Darm64-v8a%252Carmeabi-v7a%26sv%3D22&h=AUBKzxIjRWoqsZgNACxOY84CFXcBIyxz2ctSxgbHr2qKbpzzSrhoEc8TNnG6ht4DMuGyAKVJWx9iPVM39k-5sqoRx2c1fRZRZtaJRnsfbmk5gw0pR8bIctrraJT1NXw
@@ -146,3 +148,66 @@ source .venv/bin/activate
 python ~/Desktop/BBBall-RL/env_scripts/web_server.py
 ```
 ![Web Server Result](imgs/web_server_result.png)
+
+### 14. Benchmark latency with benchmark_h264.py
+
+
+```bash
+cd /tmp2/$USER/DRL_final_workspace
+source .venv/bin/activate
+python ~/Desktop/BBBall-RL/env_scripts/web_server.py
+```
+
+Ensure the phone is connected to the internet.
+Open chrome browser, search for "tap samvlu".
+Go to https://samvlu.github.io/web-04-tap-counter/.
+Ensure the counter is reset.
+
+![Benchmark latency initial](imgs/benchmark_latency_initial.png)
+
+Stop the web_server.py. Then start benchmark_h264.py
+
+```bash
+python ~/Desktop/BBBall-RL/env_scripts/benchmark_h264.py
+```
+
+result:
+```
+======================================================================
+  H.264 BENCHMARK RESULTS  (900 successful, 0 timeouts)
+  scrcpy max_size=585  poll_interval=50ms  threshold=2.0
+======================================================================
+
+  Round-trip (tap → H.264 frame shows change):
+    mean =   104.4 ms
+    std  =    13.7 ms
+    min  =    56.5 ms
+    max  =   128.0 ms
+    p50  =   108.1 ms
+    p95  =   108.7 ms
+
+  Polls until change:
+    mean =     2.9
+    min  =       2
+    max  =       3
+    avg poll time = 50.2 ms (sleep 50ms + get_frame 0.2ms + cmp 0.02ms)
+
+  get_frame() time:     mean = 0.178 ms
+  crop+compare time:    mean = 0.018 ms
+  tap() time:           mean = 5.3 ms  (includes 5ms sleep)
+  screenshot save time: mean = 15.5 ms
+
+  What each measurement means:
+    round_trip  = tap() → Android → render → H.264 encode → TCP → decode → detected
+    get_frame() = mutex lock + numpy copy of latest decoded frame
+    tap()       = sendall(DOWN) + 5ms sleep + sendall(UP)
+    crop+cmp    = numpy slice + mean absolute difference > 2.0
+
+  Estimated RL step rate: ~9.1 steps/sec (RT 104ms + tap 5ms)
+  Video resolution: 268x584 (max_size=585)
+```
+
+Open the webserver again:
+![Benchmark latency result](imgs/benchmark_latency_result.png)
+
+We can also check the screenshots in env_scripts/benchmark_h264.

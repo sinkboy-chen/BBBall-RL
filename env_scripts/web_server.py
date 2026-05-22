@@ -433,7 +433,7 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description="scrcpy Web Server")
     parser.add_argument("-p", "--port", type=int, default=5000, help="Flask port (default 5000)")
-    parser.add_argument("--max-size", type=int, default=0, help="Max video dimension")
+    parser.add_argument("--max-size", type=int, default=480, help="Max video dimension (default 480)")
     parser.add_argument("--scrcpy-port", type=int, default=27183, help="scrcpy tunnel port")
     args = parser.parse_args()
 

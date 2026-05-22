@@ -332,13 +332,11 @@ class ScrcpyClient:
 
     # ── Control API ──────────────────────────────────────────────────────
 
-    def tap(self, x: int, y: int, duration_ms: int = 50):
+    def tap(self, x: int, y: int, duration_ms: int = 5):
         """Tap at pixel coordinates (x, y)."""
         if not self.control_socket or self.video_width == 0:
             print("  ERROR: Not ready for tap")
             return
-        print(f"  TAP ({x}, {y}) on {self.video_width}x{self.video_height}")
-
         self.control_socket.sendall(serialize_touch_event(
             AMOTION_EVENT_ACTION_DOWN, x, y,
             self.video_width, self.video_height,
@@ -412,6 +410,50 @@ class ScrcpyClient:
         if frame is not None:
             return frame[:, :, ::-1].copy()
         return None
+
+    def fast_screenshot(self) -> np.ndarray:
+        """
+        Take a screenshot via 'adb exec-out screencap' (bypasses H.264 pipeline).
+        Returns BGR numpy array (H, W, 3), same format as get_frame().
+        Slower per-call (~100-300ms) than get_frame() (~2ms), but the image
+        is the EXACT current framebuffer — no H.264 encoding/decoding delay.
+        Use this for RL observations.
+        """
+        result = subprocess.run(
+            [self.adb_path, "exec-out", "screencap"],
+            capture_output=True,
+        )
+        data = result.stdout
+        if len(data) < 12:
+            return None
+        w = struct.unpack('<I', data[0:4])[0]
+        h = struct.unpack('<I', data[4:8])[0]
+        # bytes 8-11: pixel format (1=RGBA_8888)
+        expected_size = 12 + w * h * 4
+        if len(data) < expected_size:
+            return None
+        rgba = np.frombuffer(data[12:12 + w * h * 4], dtype=np.uint8).reshape(h, w, 4)
+        bgr = rgba[:, :, 2::-1].copy()  # RGBA → BGR
+        return bgr
+
+    def fast_screenshot_rgb(self) -> np.ndarray:
+        """
+        Same as fast_screenshot() but returns RGB numpy array.
+        """
+        result = subprocess.run(
+            [self.adb_path, "exec-out", "screencap"],
+            capture_output=True,
+        )
+        data = result.stdout
+        if len(data) < 12:
+            return None
+        w = struct.unpack('<I', data[0:4])[0]
+        h = struct.unpack('<I', data[4:8])[0]
+        expected_size = 12 + w * h * 4
+        if len(data) < expected_size:
+            return None
+        rgba = np.frombuffer(data[12:12 + w * h * 4], dtype=np.uint8).reshape(h, w, 4)
+        return rgba[:, :, :3].copy()  # RGBA → RGB
 
     @property
     def screen_size(self):

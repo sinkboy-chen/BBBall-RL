@@ -1,1 +1,2 @@
 *.pyc
+env_scripts/benchmark_h264/*
