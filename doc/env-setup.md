@@ -101,6 +101,9 @@ adb emu kill
 ```
 
 ### 11. Subsequent launches — fast boot from snapshot (~10 sec)
+
+ensure **Step3: Set environment variables** is executed
+
 ```bash
 emulator -avd pixel5_api31 \
   -no-window \
