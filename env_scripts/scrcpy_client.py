@@ -332,22 +332,45 @@ class ScrcpyClient:
 
     # ── Control API ──────────────────────────────────────────────────────
 
-    def tap(self, x: int, y: int, duration_ms: int = 5):
-        """Tap at pixel coordinates (x, y)."""
+    def touch_down(self, x: int, y: int):
+        """Send a raw touch DOWN event (finger presses the screen)."""
         if not self.control_socket or self.video_width == 0:
-            print("  ERROR: Not ready for tap")
             return
         self.control_socket.sendall(serialize_touch_event(
             AMOTION_EVENT_ACTION_DOWN, x, y,
             self.video_width, self.video_height,
             pressure=1.0, buttons=AMOTION_EVENT_BUTTON_PRIMARY,
         ))
-        time.sleep(duration_ms / 1000.0)
+
+    def touch_move(self, x: int, y: int):
+        """Send a raw touch MOVE event (finger drags across the screen)."""
+        if not self.control_socket or self.video_width == 0:
+            return
+        self.control_socket.sendall(serialize_touch_event(
+            AMOTION_EVENT_ACTION_MOVE, x, y,
+            self.video_width, self.video_height,
+            pressure=1.0, action_button=0, buttons=AMOTION_EVENT_BUTTON_PRIMARY,
+        ))
+
+    def touch_up(self, x: int, y: int):
+        """Send a raw touch UP event (finger leaves the screen)."""
+        if not self.control_socket or self.video_width == 0:
+            return
         self.control_socket.sendall(serialize_touch_event(
             AMOTION_EVENT_ACTION_UP, x, y,
             self.video_width, self.video_height,
             pressure=0.0, action_button=AMOTION_EVENT_BUTTON_PRIMARY, buttons=0,
         ))
+
+    def tap(self, x: int, y: int, duration_ms: int = 5):
+        """Tap at pixel coordinates (x, y)."""
+        if not self.control_socket or self.video_width == 0:
+            print("  ERROR: Not ready for tap")
+            return
+        
+        self.touch_down(x, y)
+        time.sleep(duration_ms / 1000.0)
+        self.touch_up(x, y)
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int,
               duration_ms: int = 300, steps: int = 20):
