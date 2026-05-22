@@ -130,3 +130,19 @@ cd /tmp2/$USER/DRL_final_workspace
 wget https://github.com/Genymobile/scrcpy/releases/download/v4.0/scrcpy-linux-x86_64-v4.0.tar.gz
 tar -xvf scrcpy-linux-x86_64-v4.0.tar.gz
 ```
+
+### 13. Setup python venv
+```bash
+cd /tmp2/$USER/DRL_final_workspace
+uv venv --python 3.12
+source .venv/bin/activate
+uv pip install av numpy opencv-python flask
+```
+
+### 14. Inspect emulator with web_server.py
+```bash
+cd /tmp2/$USER/DRL_final_workspace
+source .venv/bin/activate
+python ~/Desktop/BBBall-RL/env_scripts/web_server.py
+```
+![Web Server Result](imgs/web_server_result.png)
