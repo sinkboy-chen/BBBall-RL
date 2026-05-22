@@ -276,14 +276,17 @@ function fetchInfo() {
 fetchInfo();
 setInterval(fetchInfo, 5000);
 
-// Click-to-tap on video
-img.addEventListener('click', function(e) {
+// Real-time Swipe and Hold support
+let isDragging = false;
+let lastMoveTime = 0;
+
+img.addEventListener('mousedown', function(e) {
   if (!devWidth || !devHeight) return;
+  e.preventDefault();
+  isDragging = true;
   const rect = img.getBoundingClientRect();
-  const scaleX = devWidth / rect.width;
-  const scaleY = devHeight / rect.height;
-  const x = Math.round((e.clientX - rect.left) * scaleX);
-  const y = Math.round((e.clientY - rect.top) * scaleY);
+  const x = Math.round((e.clientX - rect.left) * devWidth / rect.width);
+  const y = Math.round((e.clientY - rect.top) * devHeight / rect.height);
 
   // Visual indicator
   indicator.style.left = (e.clientX - rect.left) + 'px';
@@ -292,21 +295,52 @@ img.addEventListener('click', function(e) {
   void indicator.offsetWidth;
   indicator.classList.add('show');
 
-  fetch('/api/tap', {
+  fetch('/api/touch_down', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({x, y})
-  }).then(r => r.json()).then(d => log('Tap (' + x + ', ' + y + ')')).catch(e => log('Error: ' + e));
+  }).catch(() => {});
 });
 
-// Mouse move shows coordinates
 img.addEventListener('mousemove', function(e) {
   if (!devWidth || !devHeight) return;
   const rect = img.getBoundingClientRect();
   const x = Math.round((e.clientX - rect.left) * devWidth / rect.width);
   const y = Math.round((e.clientY - rect.top) * devHeight / rect.height);
   coordsDisp.textContent = x + ', ' + y;
+
+  if (isDragging) {
+    const now = Date.now();
+    // throttle move events to roughly 30Hz to avoid flooding scrcpy
+    if (now - lastMoveTime > 30) {
+      lastMoveTime = now;
+      fetch('/api/touch_move', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({x, y})
+      }).catch(() => {});
+    }
+  }
 });
+
+function handleMouseUp(e) {
+  if (!isDragging || !devWidth || !devHeight) return;
+  isDragging = false;
+  const rect = img.getBoundingClientRect();
+  const x = Math.round((e.clientX - rect.left) * devWidth / rect.width);
+  const y = Math.round((e.clientY - rect.top) * devHeight / rect.height);
+  
+  fetch('/api/touch_up', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({x, y})
+  }).catch(() => {});
+}
+
+img.addEventListener('mouseup', handleMouseUp);
+img.addEventListener('mouseleave', handleMouseUp);
+
+// Mouse move for display already handled in mousemove block above
 
 function sendKey(key) {
   fetch('/api/key', {
@@ -348,6 +382,18 @@ function manualSwipe() {
 # Routes
 # ─────────────────────────────────────────────────────────────────────────────
 
+LOG_FILE = os.path.join(os.path.dirname(__file__), "web_events.log")
+
+def log_event(event_type: str, details: dict):
+    """Log an event to the web_events.log file with a timestamp."""
+    # Use time.time() to get precise timestamp with milliseconds
+    t = time.time()
+    ms = int((t - int(t)) * 1000)
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t)) + f".{ms:03d}"
+    log_str = f"[{timestamp}] {event_type:<12} | {details}\n"
+    with open(LOG_FILE, "a") as f:
+        f.write(log_str)
+
 @app.route("/")
 def index():
     return HTML_PAGE
@@ -386,9 +432,34 @@ def api_tap():
     data = request.get_json()
     x, y = int(data["x"]), int(data["y"])
     duration = int(data.get("duration_ms", 50))
+    log_event("TAP", {"x": x, "y": y, "duration": duration})
     threading.Thread(target=client.tap, args=(x, y, duration), daemon=True).start()
     return jsonify({"ok": True, "x": x, "y": y})
 
+
+@app.route("/api/touch_down", methods=["POST"])
+def api_touch_down():
+    data = request.get_json()
+    x, y = int(data["x"]), int(data["y"])
+    log_event("TOUCH_DOWN", {"x": x, "y": y})
+    threading.Thread(target=client.touch_down, args=(x, y), daemon=True).start()
+    return jsonify({"ok": True})
+
+@app.route("/api/touch_move", methods=["POST"])
+def api_touch_move():
+    data = request.get_json()
+    x, y = int(data["x"]), int(data["y"])
+    log_event("TOUCH_MOVE", {"x": x, "y": y})
+    threading.Thread(target=client.touch_move, args=(x, y), daemon=True).start()
+    return jsonify({"ok": True})
+
+@app.route("/api/touch_up", methods=["POST"])
+def api_touch_up():
+    data = request.get_json()
+    x, y = int(data["x"]), int(data["y"])
+    log_event("TOUCH_UP", {"x": x, "y": y})
+    threading.Thread(target=client.touch_up, args=(x, y), daemon=True).start()
+    return jsonify({"ok": True})
 
 @app.route("/api/swipe", methods=["POST"])
 def api_swipe():
@@ -397,6 +468,7 @@ def api_swipe():
     x2, y2 = int(data["x2"]), int(data["y2"])
     duration = int(data.get("duration_ms", 300))
     steps = int(data.get("steps", 20))
+    log_event("SWIPE", {"x1": x1, "y1": y1, "x2": x2, "y2": y2, "duration": duration})
     threading.Thread(target=client.swipe,
                      args=(x1, y1, x2, y2, duration, steps), daemon=True).start()
     return jsonify({"ok": True})
@@ -406,6 +478,7 @@ def api_swipe():
 def api_key():
     data = request.get_json()
     key = data["key"]
+    log_event("KEY", {"key": key})
     key_map = {"back": client.press_back, "home": client.press_home,
                "recent": client.press_app_switch}
     fn = key_map.get(key)
