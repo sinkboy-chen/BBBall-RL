@@ -87,6 +87,8 @@ echo "Ready! Installing..."
 adb install ~/Desktop/BBBall-RL/assets/Bouncy_Basketball.apk
 ```
 
+The apk is downloaded from: https://l.messenger.com/l.php?u=https%3A%2F%2Fd.apkpure.com%2Fb%2FAPK%2Fcom.DreamonStudios.BouncyBasketball%3FversionCode%3D16%26nc%3Darm64-v8a%252Carmeabi-v7a%26sv%3D22&h=AUBKzxIjRWoqsZgNACxOY84CFXcBIyxz2ctSxgbHr2qKbpzzSrhoEc8TNnG6ht4DMuGyAKVJWx9iPVM39k-5sqoRx2c1fRZRZtaJRnsfbmk5gw0pR8bIctrraJT1NXw
+
 
 ### 10. Save snapshot (one time only, after APK installed)
 ```bash
