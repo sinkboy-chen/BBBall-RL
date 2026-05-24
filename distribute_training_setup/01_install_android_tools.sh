@@ -18,7 +18,10 @@ if [ ! -d "latest" ]; then
   mv cmdline-tools latest
 fi
 
+# sdkmanager exits cleanly but `yes` gets SIGPIPE; ignore pipeline failure here.
+set +o pipefail
 yes | sdkmanager --licenses
+set -o pipefail
 
 sdkmanager \
   "platform-tools" \
