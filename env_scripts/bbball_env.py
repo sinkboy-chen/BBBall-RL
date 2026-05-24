@@ -7,6 +7,7 @@ import gymnasium as gym
 from gymnasium import spaces
 from pathlib import Path
 import os
+from collections import deque
 
 # Add env_scripts to path so we can import scrcpy_client and validate_env
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -82,14 +83,23 @@ class ScoreTracker:
 class BBBallEnv(gym.Env):
     metadata = {"render_modes": ["rgb_array"], "render_fps": 6}
 
-    def __init__(self, render_mode=None):
+    def __init__(self, render_mode=None, device_serial=None, scrcpy_port=27183):
         super(BBBallEnv, self).__init__()
         self.render_mode = render_mode
-        self.action_space = spaces.Discrete(2) # 0: Release, 1: Hold
-        self.observation_space = spaces.Box(low=0, high=255, shape=(150, 303, 1), dtype=np.uint8)
+        self.device_serial = device_serial
+        self.scrcpy_port = scrcpy_port
         
-        print("[BBBallEnv] Connecting to Scrcpy...")
-        self.client = ScrcpyClient(max_size=584)
+        self.action_space = spaces.Discrete(2) # 0: Release, 1: Hold
+        self.observation_space = spaces.Dict({
+            "image": spaces.Box(low=0, high=255, shape=(150, 303, 4), dtype=np.uint8),
+            "last_action": spaces.Discrete(2)
+        })
+        
+        self.frame_history = deque(maxlen=4)
+        self.hard_reset_triggered = False
+        
+        print(f"[BBBallEnv] Connecting to Scrcpy (serial: {device_serial}, port: {scrcpy_port})...")
+        self.client = ScrcpyClient(max_size=584, port=self.scrcpy_port, device_serial=self.device_serial)
         self.client.start()
         
         # Wait for client to connect
@@ -111,6 +121,16 @@ class BBBallEnv(gym.Env):
         resized = cv2.resize(gray, (303, 150), interpolation=cv2.INTER_AREA)
         # Add channel dimension
         return np.expand_dims(resized, axis=-1)
+
+    def _get_stacked_obs(self, single_obs, clear_history=False):
+        if clear_history:
+            self.frame_history.clear()
+        if len(self.frame_history) == 0:
+            for _ in range(4):
+                self.frame_history.append(single_obs[:, :, 0])
+        else:
+            self.frame_history.append(single_obs[:, :, 0])
+        return np.stack(list(self.frame_history), axis=-1)
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -156,27 +176,38 @@ class BBBallEnv(gym.Env):
         frame = self.client.get_frame()
         self.last_raw_frame = frame.copy() if frame is not None else np.zeros((268, 584, 3), dtype=np.uint8)
         
+        single_obs = self._get_obs(self.last_raw_frame)
+        stacked_obs = self._get_stacked_obs(single_obs, clear_history=True)
+        
+        obs_dict = {
+            "image": stacked_obs,
+            "last_action": self.last_action
+        }
         info = {}
-        return self._get_obs(self.last_raw_frame), info
+        return obs_dict, info
 
     def _hard_reset(self):
-        print("[BBBallEnv] Triggering Hard Reset via snapshot load...")
+        print(f"[BBBallEnv] Triggering Hard Reset via snapshot load for {self.device_serial}...")
         if self.client:
             self.client.stop()
             
         try:
-            subprocess.run(["adb", "emu", "avd", "snapshot", "load", "game_ready"], check=True)
+            cmd = ["adb"]
+            if self.device_serial:
+                cmd += ["-s", self.device_serial]
+            cmd += ["emu", "avd", "snapshot", "load", "game_ready"]
+            subprocess.run(cmd, check=True)
         except subprocess.CalledProcessError as e:
             print(f"[BBBallEnv] Hard Reset Failed: {e}")
             
-        print("[BBBallEnv] Waiting for Android boot to complete...")
-        subprocess.run([
-            "bash", "-c",
-            'until adb shell getprop sys.boot_completed 2>/dev/null | grep -q "1"; do sleep 1; done'
-        ])
+        print(f"[BBBallEnv] Waiting for Android boot to complete for {self.device_serial}...")
+        cmd_bash = f'until adb -s {self.device_serial} shell getprop sys.boot_completed 2>/dev/null | grep -q "1"; do sleep 1; done' if self.device_serial else 'until adb shell getprop sys.boot_completed 2>/dev/null | grep -q "1"; do sleep 1; done'
+        subprocess.run(["bash", "-c", cmd_bash])
+        
+        self.hard_reset_triggered = True
         
         print("[BBBallEnv] Re-initializing ScrcpyClient...")
-        self.client = ScrcpyClient(max_size=584)
+        self.client = ScrcpyClient(max_size=584, port=self.scrcpy_port, device_serial=self.device_serial)
         self.client.start()
         
         while self.client.get_frame() is None:
@@ -206,7 +237,11 @@ class BBBallEnv(gym.Env):
         # Fetch frame
         frame = self.client.get_frame()
         if frame is None:
-            return np.zeros((150, 303, 1), dtype=np.uint8), 0.0, True, False, {}
+            empty_obs = {
+                "image": np.zeros((150, 303, 4), dtype=np.uint8),
+                "last_action": self.last_action
+            }
+            return empty_obs, 0.0, True, False, {}
             
         self.last_raw_frame = frame.copy()
         
@@ -231,9 +266,20 @@ class BBBallEnv(gym.Env):
             
         terminated = (self.consecutive_non_game_frames >= 2)
         
+        clear_history = False
+        if self.hard_reset_triggered:
+            clear_history = True
+            self.hard_reset_triggered = False
+            
         obs = self._get_obs(frame)
+        stacked_obs = self._get_stacked_obs(obs, clear_history=clear_history)
+        
+        obs_dict = {
+            "image": stacked_obs,
+            "last_action": self.last_action
+        }
         info = {}
-        return obs, float(reward), terminated, False, info
+        return obs_dict, float(reward), terminated, False, info
 
     def render(self):
         if self.render_mode == "rgb_array":

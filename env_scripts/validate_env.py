@@ -92,18 +92,7 @@ def draw_debug_overlay(display_frame):
 
 def save_debug_image(frame, prefix):
     """Saves a single screenshot with debug info drawn on it to the debug_images folder."""
-    if frame is None: return
-    
-    debug_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug_images")
-    os.makedirs(debug_dir, exist_ok=True)
-    
-    display_frame = frame.copy()
-    draw_debug_overlay(display_frame)
-
-    timestamp = time.strftime("%H%M%S")
-    filename = f"{prefix}_{timestamp}.png"
-    filepath = os.path.join(debug_dir, filename)
-    cv2.imwrite(filepath, display_frame)
+    return  # Disabled to optimize performance during training
 
 # ================= SCREEN DETECTION =================
 

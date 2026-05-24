@@ -103,9 +103,12 @@ def recv_exactly(sock: socket.socket, n: int) -> bytes:
     return data
 
 
-def _adb_run(args: list, adb_path: str = "adb", check: bool = True):
+def _adb_run(args: list, adb_path: str = "adb", check: bool = True, device_serial: str = None):
     """Run an adb command."""
-    cmd = [adb_path] + args
+    if device_serial:
+        cmd = [adb_path, "-s", device_serial] + args
+    else:
+        cmd = [adb_path] + args
     print(f"  [ADB] {' '.join(cmd)}")
     result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if result.returncode != 0:
@@ -160,17 +163,19 @@ class ScrcpyClient:
     Designed for RL agent integration — no GUI required.
     """
 
-    def __init__(self, max_size=0, port=27183, server_path=None, adb_path="adb"):
+    def __init__(self, max_size=0, port=27183, server_path=None, adb_path="adb", device_serial=None):
         """
         Args:
             max_size: Max video dimension (0 = original resolution).
             port: TCP port for adb forward tunnel.
             server_path: Path to scrcpy-server jar. Auto-detected if None.
             adb_path: Path to adb binary.
+            device_serial: Optional specific adb device serial.
         """
         self.max_size = max_size
         self.port = port
         self.adb_path = adb_path
+        self.device_serial = device_serial
         self.scid = random.randint(0, 0x7FFFFFFF)
 
         # Auto-detect server jar
@@ -213,16 +218,19 @@ class ScrcpyClient:
 
         # Push jar
         _adb_run(["push", self.server_path, "/data/local/tmp/scrcpy-server.jar"],
-                 adb_path=self.adb_path)
+                 adb_path=self.adb_path, device_serial=self.device_serial)
 
         # Set up forward tunnel
         socket_name = f"scrcpy_{self.scid:08x}"
         _adb_run(["forward", f"tcp:{self.port}", f"localabstract:{socket_name}"],
-                 adb_path=self.adb_path)
+                 adb_path=self.adb_path, device_serial=self.device_serial)
 
         # Start server
-        server_cmd = [
-            self.adb_path, "shell",
+        server_cmd = [self.adb_path]
+        if self.device_serial:
+            server_cmd += ["-s", self.device_serial]
+        server_cmd += [
+            "shell",
             "CLASSPATH=/data/local/tmp/scrcpy-server.jar",
             "app_process", "/", "com.genymobile.scrcpy.Server",
             SCRCPY_VERSION,
@@ -442,8 +450,12 @@ class ScrcpyClient:
         is the EXACT current framebuffer — no H.264 encoding/decoding delay.
         Use this for RL observations.
         """
+        cmd = [self.adb_path]
+        if self.device_serial:
+            cmd += ["-s", self.device_serial]
+        cmd += ["exec-out", "screencap"]
         result = subprocess.run(
-            [self.adb_path, "exec-out", "screencap"],
+            cmd,
             capture_output=True,
         )
         data = result.stdout
@@ -463,8 +475,12 @@ class ScrcpyClient:
         """
         Same as fast_screenshot() but returns RGB numpy array.
         """
+        cmd = [self.adb_path]
+        if self.device_serial:
+            cmd += ["-s", self.device_serial]
+        cmd += ["exec-out", "screencap"]
         result = subprocess.run(
-            [self.adb_path, "exec-out", "screencap"],
+            cmd,
             capture_output=True,
         )
         data = result.stdout
@@ -536,7 +552,7 @@ class ScrcpyClient:
 
         try:
             _adb_run(["forward", "--remove", f"tcp:{self.port}"],
-                     adb_path=self.adb_path, check=False)
+                     adb_path=self.adb_path, check=False, device_serial=self.device_serial)
         except Exception:
             pass
         print("  Stopped.")
