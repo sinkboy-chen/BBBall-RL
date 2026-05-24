@@ -66,8 +66,8 @@ def main():
 
     # PPO hyperparameters
     parser.add_argument("--learning-rate", type=float, default=3e-4)
-    parser.add_argument("--n-steps", type=int, default=2048,
-                        help="Rollout steps per env per update (default: 2048)")
+    parser.add_argument("--n-steps", type=int, default=512,
+                        help="Rollout steps per env per update (default: 512)")
     parser.add_argument("--batch-size", type=int, default=128,
                         help="Mini-batch size for gradient updates (default: 128)")
     parser.add_argument("--ent-coef", type=float, default=0.01,
