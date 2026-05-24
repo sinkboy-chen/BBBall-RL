@@ -1,0 +1,8 @@
+av
+numpy
+opencv-python
+flask
+gymnasium
+stable-baselines3
+wandb
+ray[rllib]
