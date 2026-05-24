@@ -11,13 +11,12 @@ if ! command -v uv >/dev/null 2>&1; then
   exit 1
 fi
 
-uv venv --python 3.12
+if [ ! -d "${WORKSPACE_ROOT}/.venv" ]; then
+  uv venv --python 3.12
+fi
 source "${WORKSPACE_ROOT}/.venv/bin/activate"
 
-REPO_DIR="${REPO_DIR:-${HOME}/Desktop/BBBall-RL}"
-uv pip install -r "${REPO_DIR}/requirements-base.txt"
-
-# Torch install strategy:
+# Torch install strategy (install first to avoid CUDA wheels being pulled as deps):
 # - CPU nodes: TORCH_VARIANT=cpu
 # - GPU nodes: default (CUDA-enabled wheel) or set TORCH_INDEX_URL explicitly
 TORCH_VARIANT="${TORCH_VARIANT:-cpu}"
@@ -30,3 +29,6 @@ elif [ "${TORCH_VARIANT}" = "cpu" ]; then
 else
   uv pip install torch torchvision
 fi
+
+REPO_DIR="${REPO_DIR:-${HOME}/Desktop/BBBall-RL}"
+uv pip install -r "${REPO_DIR}/requirements-base.txt"
