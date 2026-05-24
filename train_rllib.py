@@ -85,11 +85,27 @@ def _nested_get(data, keys, default=None):
 
 
 def _extract_learner_stats(result):
+    paths = [
+        ["info", "learner", "default_policy", "learner_stats"],
+        ["info", "learner", "default_module", "learner_stats"],
+        ["info", "learner", "learner_stats"],
+        ["learner_results", "default_policy", "learner_stats"],
+        ["learner_results", "default_module", "learner_stats"],
+        ["learner_results", "learner_stats"],
+    ]
+    for path in paths:
+        stats = _nested_get(result, path)
+        if isinstance(stats, dict) and stats:
+            return stats
+
     learner = _nested_get(result, ["info", "learner"], {})
-    if isinstance(learner, dict) and "default_policy" in learner:
-        learner = learner.get("default_policy", {})
     if isinstance(learner, dict):
-        return learner.get("learner_stats", {}) or {}
+        for value in learner.values():
+            if isinstance(value, dict):
+                stats = value.get("learner_stats")
+                if isinstance(stats, dict) and stats:
+                    return stats
+
     return {}
 
 
@@ -220,6 +236,7 @@ def parse_args():
     parser.add_argument("--checkpoint-freq", type=int, default=10)
     parser.add_argument("--checkpoint-dir", type=str, default="models/rllib")
     parser.add_argument("--log-dir", type=str, default="logs/rllib")
+    parser.add_argument("--resume-from", type=str, default="", help="Path to an RLlib checkpoint")
 
     parser.add_argument("--eval-interval", type=int, default=24)
     parser.add_argument("--eval-episodes", type=int, default=27)
@@ -252,6 +269,12 @@ def main():
 
     run_id = time.strftime("%Y%m%d_%H%M%S")
     checkpoint_root = os.path.join(args.checkpoint_dir, run_id)
+    if args.resume_from:
+        resume_path = args.resume_from
+        if os.path.isdir(resume_path):
+            checkpoint_root = resume_path
+        else:
+            checkpoint_root = os.path.dirname(resume_path)
     os.makedirs(checkpoint_root, exist_ok=True)
 
     log_root = os.path.join(args.log_dir, run_id)
@@ -276,6 +299,10 @@ def main():
     print("[RLlib] Training started")
     print(f"[RLlib] train_batch_size={train_batch_size}")
     print(f"[RLlib] checkpoints={checkpoint_root}")
+
+    if args.resume_from:
+        print(f"[RLlib] Restoring from checkpoint: {args.resume_from}")
+        algo.restore(args.resume_from)
 
     iteration = 0
     try:
