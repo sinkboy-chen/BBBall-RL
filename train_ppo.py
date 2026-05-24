@@ -3,20 +3,20 @@ import os
 import sys
 import glob
 
-# Cap ML library threads BEFORE any imports to prevent workstation watchdog kills.
-# NOTE: Do NOT set these for emulator_manager.py — emulators need threads for SwiftShader rendering.
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
-os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
-os.environ["NUMEXPR_NUM_THREADS"] = "1"
+# # Cap ML library threads BEFORE any imports to prevent workstation watchdog kills.
+# # NOTE: Do NOT set these for emulator_manager.py — emulators need threads for SwiftShader rendering.
+# os.environ["OMP_NUM_THREADS"] = "1"
+# os.environ["MKL_NUM_THREADS"] = "1"
+# os.environ["OPENBLAS_NUM_THREADS"] = "1"
+# os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+# os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
 import argparse
 import cv2
 import torch
 
-cv2.setNumThreads(1)
-torch.set_num_threads(1)
+# cv2.setNumThreads(1)
+# torch.set_num_threads(1)
 
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import SubprocVecEnv
