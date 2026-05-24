@@ -59,3 +59,22 @@ Used to quickly reset the episode without rebuilding sockets. We only use Quarte
 1. **If on Next Quarter Screen:** Tap "Next Quarter Button" -> wait for Q2 Game Screen -> Tap "Pause Button" -> wait for Pause Screen -> Tap "Rematch Button" -> wait for Q1 Game Screen.
 2. **If on Game Screen (Q1/Q2):** Tap "Pause Button" -> wait for Pause Screen -> Tap "Rematch Button" -> wait for Q1 Game Screen.
 3. **If on Pause Screen:** Tap "Rematch Button" -> wait for Q1 Game Screen.
+
+## Event-Based Score Tracking
+To track the game score in real-time with zero latency and high reliability, we utilize an event-based state machine powered by OpenCV Template Matching (`cv2.matchTemplate` using `TM_CCOEFF_NORMED`).
+
+### 1. Template Matching
+Instead of doing Optical Character Recognition (OCR) on the scoreboard digits, we detect the dynamic popups that appear when a team scores. We crop a specific Region of Interest (ROI) at `y: 18-39, x: 243-338` (in the 584x268 layout) and match it against predefined templates:
+- **Event Triggers**: `2_point.png`, `3_point.png`, `dunk.png`
+- **Team Colors**: `blue.png`, `red.png`
+
+We use a strict correlation threshold of `0.85` to ensure accurate detections.
+
+### 2. State Machine Logic
+The tracker operates in two states to reliably parse the game's popup sequences:
+
+- **`NEUTRAL` State**: Continuously scans the ROI for an event trigger (`2_point`, `3_point`, or `dunk`). When a trigger is found, it transitions to `WAITING_COLOR` and stores the pending points (2 points for `2_point` and `dunk`; 3 points for `3_point`).
+- **`WAITING_COLOR` State**: Continuously scans the ROI for a team color popup.
+  - If `blue` is detected, the **Red (Left)** team scored. The pending points are added to the Red team's score, and the state reverts to `NEUTRAL`.
+  - If `red` is detected, the **Blue (Right)** team scored. The pending points are added to the Blue team's score, and the state reverts to `NEUTRAL`.
+  - **Timeout Strategy**: If 5.0 seconds elapse in this state without seeing a `blue` or `red` template, the state machine assumes the event was a false positive or the animation was skipped. It automatically aborts the pending points and reverts to `NEUTRAL`.
