@@ -179,7 +179,7 @@ def main():
             total_timesteps=args.total_timesteps,
             callback=CallbackList([checkpoint_callback, wandb_callback]),
             reset_num_timesteps=reset_num_timesteps,
-            progress_bar=False,
+            progress_bar=True,
         )
         print("[*] Training complete!")
     except KeyboardInterrupt:
