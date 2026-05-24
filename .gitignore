@@ -1,2 +1,3 @@
 *.pyc
 env_scripts/benchmark_h264/*
+env_scripts/screenshots/*
