@@ -27,6 +27,81 @@ import numpy as np
 from flask import Flask, Response, request, jsonify
 
 from scrcpy_client import ScrcpyClient
+from pathlib import Path
+
+class ScoreTracker:
+    def __init__(self):
+        self.recorded_score = {"left": 0, "right": 0}
+        self.state = "NEUTRAL"
+        self.pending_points = 0
+        self.state_timestamp = 0.0
+        
+        self.templates = {}
+        template_dir = Path.home() / "Desktop" / "BBBall-RL" / "assets" / "scoring_template"
+        for label in ["blue", "red", "2_point", "3_point", "dunk"]:
+            p = template_dir / f"{label}.png"
+            if p.exists():
+                self.templates[label] = cv2.imread(str(p), cv2.IMREAD_GRAYSCALE)
+            else:
+                print(f"[ScoreTracker] Warning: Template {p} not found!")
+
+    def reset(self):
+        self.recorded_score = {"left": 0, "right": 0}
+        self.state = "NEUTRAL"
+        self.pending_points = 0
+        print("[ScoreTracker] Score explicitly reset to 0-0")
+
+    def process_frame(self, frame):
+        if not self.templates: return
+        
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        roi = gray[18:39, 243:338]
+        
+        best_label = "other"
+        best_score = -1.0
+        
+        for label, template in self.templates.items():
+            if template is None: continue
+            if roi.shape[0] < template.shape[0] or roi.shape[1] < template.shape[1]:
+                continue
+                
+            res = cv2.matchTemplate(roi, template, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, _ = cv2.minMaxLoc(res)
+            
+            if max_val > best_score:
+                best_score = max_val
+                best_label = label
+                
+        if best_score < 0.85:
+            best_label = "other"
+            
+        if self.state == "NEUTRAL":
+            if best_label in ["2_point", "3_point", "dunk"]:
+                self.state = "WAITING_COLOR"
+                self.pending_points = 2 if best_label in ["2_point", "dunk"] else 3
+                self.state_timestamp = time.time()
+                print(f"[ScoreTracker] Detected {best_label}. Waiting for color... (5s timeout)")
+                
+        elif self.state == "WAITING_COLOR":
+            if time.time() - self.state_timestamp > 5.0:
+                print(f"[ScoreTracker] Timeout waiting for color. Reverting to NEUTRAL.")
+                self.state = "NEUTRAL"
+                self.pending_points = 0
+                return
+                
+            if best_label == "blue":
+                self.recorded_score["left"] += self.pending_points
+                print(f"[ScoreTracker] Detected blue. Red (Left) gets {self.pending_points} points! Score: {self.recorded_score}")
+                self.state = "NEUTRAL"
+                self.pending_points = 0
+            elif best_label == "red":
+                self.recorded_score["right"] += self.pending_points
+                print(f"[ScoreTracker] Detected red. Blue (Right) gets {self.pending_points} points! Score: {self.recorded_score}")
+                self.state = "NEUTRAL"
+                self.pending_points = 0
+
+score_tracker = ScoreTracker()
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Flask app
@@ -217,6 +292,17 @@ HTML_PAGE = """<!DOCTYPE html>
     <h2>Device Info</h2>
     <div class="info-row"><span class="label">Device</span><span class="value" id="dev-name">—</span></div>
     <div class="info-row"><span class="label">Resolution</span><span class="value" id="dev-res">—</span></div>
+    
+    <h2 style="margin-top:20px">Scoreboard</h2>
+    <div class="info-row">
+      <span class="label" style="color: #ff5555; font-weight: bold;">Red (Left)</span>
+      <span class="value" id="score-left" style="font-size: 18px; font-weight: bold;">0</span>
+    </div>
+    <div class="info-row">
+      <span class="label" style="color: #5555ff; font-weight: bold;">Blue (Right)</span>
+      <span class="value" id="score-right" style="font-size: 18px; font-weight: bold;">0</span>
+    </div>
+    <button class="btn" style="width: 100%; margin-top: 10px;" onclick="resetScore()">Reset Score</button>
 
     <h2 style="margin-top:20px">Navigation</h2>
     <div class="btn-row">
@@ -275,6 +361,24 @@ function fetchInfo() {
 }
 fetchInfo();
 setInterval(fetchInfo, 5000);
+
+// Score logic
+function fetchScore() {
+  fetch('/api/score').then(r => r.json()).then(d => {
+    document.getElementById('score-left').textContent = d.left;
+    document.getElementById('score-right').textContent = d.right;
+  }).catch(() => {});
+}
+setInterval(fetchScore, 500);
+
+function resetScore() {
+  fetch('/api/score/reset', { method: 'POST' })
+    .then(() => {
+        log('Score explicitly reset to 0-0');
+        fetchScore();
+    })
+    .catch(e => log('Error resetting score'));
+}
 
 // Real-time Swipe and Hold support
 let isDragging = false;
@@ -398,12 +502,21 @@ def log_event(event_type: str, details: dict):
 def index():
     return HTML_PAGE
 
+@app.route("/api/score", methods=["GET"])
+def get_score():
+    return jsonify(score_tracker.recorded_score)
+
+@app.route("/api/score/reset", methods=["POST"])
+def reset_score():
+    score_tracker.reset()
+    return jsonify({"status": "ok"})
 
 def gen_mjpeg():
     """Generator yielding MJPEG frames."""
     while True:
         frame = client.get_frame()
         if frame is not None:
+            score_tracker.process_frame(frame)
             _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
             yield (b"--frame\r\n"
                    b"Content-Type: image/jpeg\r\n\r\n" +
