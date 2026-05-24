@@ -6,4 +6,5 @@ source "${SCRIPT_DIR}/00_env_vars.sh"
 source "${WORKSPACE_ROOT}/.venv/bin/activate"
 
 RAY_PORT="${RAY_PORT:-6379}"
-ray start --head --num-gpus=1 --port="${RAY_PORT}" --dashboard-host=0.0.0.0
+CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-3}" \
+	ray start --head --num-gpus=1 --port="${RAY_PORT}" --dashboard-host=0.0.0.0
