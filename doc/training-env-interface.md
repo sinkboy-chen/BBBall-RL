@@ -1,81 +1,61 @@
-## Settings
-584x286 screen resolution
+# BB-Ball RL Training Environment Interface
 
-## Screens
-1. q1 game screen
-2. next quarter screen
-3. q2 game screen
-4. pause screen
+## Emulator Configuration & Resolution Settings
+- **Emulator Command-line:** The emulator size is set via `adb shell wm size 540x1170`.
+- **Scrcpy Capture:** The game forces landscape mode. Scrcpy captures this landscape feed with `--max-size 584`.
+- **Effective Resolution:** `584x268` (Scrcpy dynamically scales the height to maintain the landscape aspect ratio and codec alignment).
 
-## Buttons
-1. "rematch button" at pause screen: (346, 193)
-2. "pause button" at q1 game screen and q2 game screen: (291, 239)
-3. "next quarter button" at next quarter screen: (313, 193)
+## Known UI Coordinates (584x268 Layout)
+1. **Rematch Button** (Pause screen): `(346, 193)`
+2. **Pause Button** (Q1/Q2 Game screens): `(291, 239)`
+3. **Next Quarter Button** (Next Quarter screen): `(313, 193)`
 
-## Flows
-1. In q1 game screen, after the quarter ended, it will go to next quarter screen
-2. In next quarter screen, after tapped "next quarter button", it will go to q2 game screen
-3. In q1 game screen and q2 game screen, if tapped "pause button", it will go to pause screen
-4. In pause screen, if tapped "rematch button", it will go to q1 game screen
+## Game States
+1. **Q1 Game Screen:** The main training environment.
+2. **Next Quarter Screen:** Appears after the 30-second game clock expires (plus animations).
+3. **Q2 Game Screen:** Reached if the Next Quarter button is tapped.
+4. **Pause Screen:** Appears when the pause button is tapped mid-game, or when the `game_ready` snapshot is loaded.
 
+## Screen Detection (RGB Tolerances)
+We classify the current screen based on the mean RGB values of specific rectangular crops.
 
-## Screen Detection
-### **Script 1 (`filter_by_color.py`)**
-detect next quarter screen
+### 1. Next Quarter Screen
 - **Rectangle:** `(240, 201)` to `(342, 203)`
 - **RGB Range:**
-  - **Red:** `2.5` to `3.0`
-  - **Green:** `230.0` to `235.0`
-  - **Blue:** `2.0` to `3.0`
+  - **Red:** `0.0` to `5.0`
+  - **Green:** `210.0` to `250.0`
+  - **Blue:** `0.0` to `5.0`
 
-### **Script 2 (`filter_by_color2.py`)**
-detect pause game screen
+### 2. Pause Game Screen
 - **Rectangle:** `(257, 159)` to `(324, 163)`
 - **RGB Range:**
-  - **Red:** `0.0` to `1.0`
-  - **Green:** `160.0` to `170.0`
-  - **Blue:** `0.0` to `1.0`
+  - **Red:** `0.0` to `5.0`
+  - **Green:** `140.0` to `190.0`
+  - **Blue:** `0.0` to `5.0`
 
+### 3. Game Screen (Q1/Q2)
+- Assumed as default if the screen does not match either the Next Quarter or Pause criteria.
 
-## RL training environment interface
-### Load snapshot
-Initially or when the environment is behaving unexpectedly, we can reset the environment by load the saved Android snapshot.
+## Robust Validation & Reset Strategy
+When interacting with the environment (e.g., executing soft resets or hard resets), the following robust verification strategies MUST be used in the Python `gym.Env` wrapper to prevent desyncs and UI glitches:
 
-We have save the "game_ready" snapshot by:
-```
-export ANDROID_HOME=/tmp2/$USER/DRL_final_workspace/android-sdk
-export ANDROID_SDK_ROOT=$ANDROID_HOME
-export ANDROID_USER_HOME=/tmp2/$USER/DRL_final_workspace/.android
-export ANDROID_AVD_HOME=/tmp2/$USER/DRL_final_workspace/.android/avd
-export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator
-export ANDROID_EMULATOR_HOME=/tmp2/$USER/DRL_final_workspace/.android
-```
+1. **2-Consecutive-Frame Rule:** To eliminate 1-frame rendering glitches or UI transitions, a target screen state is ONLY considered valid if the RGB detection matches for **at least 2 consecutive checks**.
+2. **Action Delay:** Always wait **1.0 second** immediately after sending an ADB/Scrcpy tap action before attempting to verify the next state. This ensures the Android UI has finished animating.
+3. **State Verification Retries:** When checking an initial expected state (e.g. verifying we are on the Pause screen before clicking Rematch), retry up to **5 times** with a **0.3-second interval** before throwing an environment error.
+4. **Transition Timeouts:** When waiting for an asynchronous transition (e.g., waiting for the Next Quarter screen to naturally appear), poll at `0.1s` intervals with an appropriately long timeout (e.g., `120s`).
 
-```
-adb emu avd snapshot save game_ready
-```
+## Resetting the Environment (`env.reset()`)
 
-And it can be loaded by 
+### Hard Reset (Snapshot Load)
+Used initially or when the environment enters an unrecoverable/error state.
+1. Run `adb emu avd snapshot load game_ready`.
+2. Wait for Android boot completion (`adb shell getprop sys.boot_completed`).
+3. Re-initialize the Scrcpy/TCP connections (snapshot loading breaks existing adb sockets).
+4. Verify the emulator lands on the **Pause screen**.
 
-```
-adb emu avd snapshot load game_ready
-```
+### Soft Reset (In-Game Navigation)
+Used to quickly reset the episode without rebuilding sockets. We only use Quarter 1 (Q1) for training.
 
-However, you should mind that the connection of scrcpy, adb may need to be reconfigure.
-
-After game_ready snapshot loaded, it will be on the pause screen. You could detect the pause screen to check if it is loaded correctly.
-
-### Navigate to reset env in game
-There are four quarters in this game, we will only use quarter 1 for training. And next quarter screen will be after each quarter.
-
-1. If it is next quarter screen, tap "next quarter button"
-
-2. If it is pause screen, tap "rematch button"
-
-3. If not next quarter screen or pause screen, then it is q1 game screen or q2 game screen
-
-4. If we have tapped "next quarter button", then it is q2 game screen
-
-5. If it is q1 game screen or q2 game screen, then tap "pause button"
-
-6. There will be two scenarios we want to reset the environment, after q1 ended, the episode ended. Or env.reset() is called
+1. **If on Next Quarter Screen:** Tap "Next Quarter Button" -> wait for Q2 Game Screen -> Tap "Pause Button" -> wait for Pause Screen -> Tap "Rematch Button" -> wait for Q1 Game Screen.
+2. **If on Game Screen (Q1/Q2):** Tap "Pause Button" -> wait for Pause Screen -> Tap "Rematch Button" -> wait for Q1 Game Screen.
+3. **If on Pause Screen:** Tap "Rematch Button" -> wait for Q1 Game Screen.
