@@ -67,7 +67,7 @@ def main():
     run = wandb.init(
         project="bbball-rl",
         config=config,
-        sync_tensorboard=True,  # auto-upload sb3 tensorboard logs to wandb
+        sync_tensorboard=False,  # set True only if tensorboard is installed
         monitor_gym=False,
         save_code=True,
     )
@@ -89,7 +89,6 @@ def main():
         gae_lambda=config["gae_lambda"],
         ent_coef=args.ent_coef,
         verbose=1,
-        tensorboard_log=f"runs/{run.id}",
     )
 
     # Set up checkpoints callback to save the model periodically
