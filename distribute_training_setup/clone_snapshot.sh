@@ -11,14 +11,13 @@ SOURCE_USER="${SOURCE_USER:-b12902131}"
 AVD_NAME="${AVD_NAME:-pixel5_api31}"
 SNAP_NAME="${SNAP_NAME:-game_ready}"
 
-SRC="/tmp2/${SOURCE_USER}/DRL_final_workspace/.android/avd/${AVD_NAME}.avd/snapshots/${SNAP_NAME}/"
-DST="/tmp2/${USER}/DRL_final_workspace/.android/avd/${AVD_NAME}.avd/snapshots/${SNAP_NAME}/"
+SRC="/tmp2/${SOURCE_USER}/DRL_final_workspace/.android/avd/"
+DST="/tmp2/${USER}/DRL_final_workspace/.android/avd/"
 
 mkdir -p "${DST}"
 rsync -avz --progress "${SOURCE_USER}@${SOURCE_HOST}:${SRC}" "${DST}"
 
-# If the .ini file contains the source path, patch it to the local user path.
-INI_PATH="/tmp2/${USER}/DRL_final_workspace/.android/avd/${AVD_NAME}.ini"
-if [ -f "${INI_PATH}" ]; then
-	sed -i "s|/tmp2/${SOURCE_USER}/DRL_final_workspace|/tmp2/${USER}/DRL_final_workspace|g" "${INI_PATH}"
-fi
+# Patch all path references from source user to local user.
+find "${DST}" -type f \( -name "*.ini" -o -name "*.cfg" \) | while read -r f; do
+    sed -i "s|/tmp2/${SOURCE_USER}/DRL_final_workspace|/tmp2/${USER}/DRL_final_workspace|g" "$f"
+done
