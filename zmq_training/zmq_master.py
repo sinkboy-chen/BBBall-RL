@@ -284,6 +284,22 @@ def main():
     round_idx = 0
     total_steps_trained = 0
     
+    if resume_path:
+        base_name = os.path.basename(resume_path)
+        if "round_" in base_name:
+            try:
+                round_str = base_name.split("round_")[1].split(".")[0]
+                round_idx = int(round_str) + 1
+                print(f"[+] Resumed: starting from round {round_idx}")
+            except Exception as e:
+                print(f"[!] Warning: Could not parse round from checkpoint filename: {e}")
+        elif "final" in base_name:
+            print(f"[*] Resumed from final checkpoint.")
+            
+        if hasattr(model, "num_timesteps") and model.num_timesteps > 0:
+            total_steps_trained = model.num_timesteps
+            print(f"[+] Resumed: starting with cumulative steps {total_steps_trained:,}")
+    
     try:
         while round_idx < args.total_rounds and total_steps_trained < args.total_steps:
             print(f"\n==================== ROUND {round_idx} ====================")
