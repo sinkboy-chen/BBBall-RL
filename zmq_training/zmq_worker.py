@@ -447,9 +447,9 @@ def main():
             reply = req_socket.recv_pyobj()
             req_socket.close()
 
-            # Handle blocking state on Master startup
-            if reply.get("status") == "wait":
-                print("[*] Master registration phase still active. Waiting 3 seconds...")
+            # Handle blocking state or master lagging/updating
+            if reply.get("status") == "wait" or reply.get("round", round_idx) < round_idx:
+                print(f"[*] Master is still on round {reply.get('round')} (we want {round_idx}). Waiting 3 seconds...")
                 time.sleep(3)
                 continue
             elif reply.get("status") != "ok":

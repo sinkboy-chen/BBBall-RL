@@ -423,14 +423,24 @@ def main():
                             router_socket.send_pyobj({"status": "ok"})
                         else:
                             # Standard get_model request
-                            router_socket.send(identity, zmq.SNDMORE)
-                            router_socket.send(b"", zmq.SNDMORE)
-                            router_socket.send_pyobj({
-                                "status": "ok",
-                                "round": round_idx,
-                                "mode": mode,
-                                "weights": weights_bytes
-                            })
+                            req_round = msg.get("round", round_idx)
+                            if req_round > round_idx:
+                                # Worker is requesting a future round that master hasn't entered yet
+                                router_socket.send(identity, zmq.SNDMORE)
+                                router_socket.send(b"", zmq.SNDMORE)
+                                router_socket.send_pyobj({
+                                    "status": "wait",
+                                    "round": round_idx
+                                })
+                            else:
+                                router_socket.send(identity, zmq.SNDMORE)
+                                router_socket.send(b"", zmq.SNDMORE)
+                                router_socket.send_pyobj({
+                                    "status": "ok",
+                                    "round": round_idx,
+                                    "mode": mode,
+                                    "weights": weights_bytes
+                                })
                     except Exception as e:
                         print(f"[!] ROUTER sync error: {e}")
                         
