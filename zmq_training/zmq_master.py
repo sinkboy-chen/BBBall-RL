@@ -5,6 +5,8 @@ import time
 import io
 import glob
 import argparse
+import threading
+import socket
 import numpy as np
 import torch
 import gymnasium as gym
@@ -141,8 +143,6 @@ def main():
     parser.add_argument("--wandb-project", type=str, default="bbball-rl-distributed")
     parser.add_argument("--wandb-run-id", type=str, default=None, help="WandB run ID to resume")
     
-    parser.add_argument("--total-envs", type=int, default=27, help="Total expected environments (9 workstations * 3 emulators)")
-    parser.add_argument("--min-success-envs", type=int, default=15, help="Minimum successful environments to start grace timer")
     parser.add_argument("--grace-timeout", type=float, default=10.0, help="Grace countdown duration in seconds")
     parser.add_argument("--global-timeout", type=float, default=120.0, help="Global collection timeout in seconds")
     parser.add_argument("--eval-interval", type=int, default=30, help="Evaluation frequency in rounds")
@@ -159,7 +159,6 @@ def main():
         parser.error("--resume-from and --resume-latest are mutually exclusive.")
 
     # ── Action & Observation Spaces ───────────────────────────────────────────
-    # Configured to match BBBallEnv without triggering direct emulator initialization on Master
     action_space = spaces.Discrete(2)
     observation_space = spaces.Dict({
         "image": spaces.Box(low=0, high=255, shape=(150, 303, 4), dtype=np.uint8),
@@ -230,6 +229,95 @@ def main():
     logger = configure(LOG_DIR, ["stdout", "csv"])
     model.set_logger(logger)
 
+    # ── ZMQ Setup ─────────────────────────────────────────────────────────────
+    zmq_context = zmq.Context()
+    
+    # ROUTER allows non-blocking synchronous queries from standard REQ clients
+    router_socket = zmq_context.socket(zmq.ROUTER)
+    router_socket.bind(f"tcp://{args.host}:{args.rep_port}")
+    
+    # PULL gathers episodic data pushed by workers asynchronously
+    pull_socket = zmq_context.socket(zmq.PULL)
+    pull_socket.bind(f"tcp://{args.host}:{args.pull_port}")
+    
+    # ── Dynamic Worker Registration Phase (Blocking Input in the Front) ──────
+    registered_workers = {}
+    registration_active = True
+    registration_lock = threading.Lock()
+
+    def handle_registration():
+        poller = zmq.Poller()
+        poller.register(router_socket, zmq.POLLIN)
+        while registration_active:
+            socks = dict(poller.poll(100))
+            if router_socket in socks:
+                try:
+                    identity = router_socket.recv()
+                    empty = router_socket.recv()
+                    msg = router_socket.recv_pyobj()
+                    
+                    event = msg.get("event")
+                    if event == "register_worker":
+                        w_id = msg.get("workstation")
+                        num_envs = msg.get("num_envs", 0)
+                        with registration_lock:
+                            registered_workers[w_id] = num_envs
+                        print(f"\n[+] Registered worker '{w_id}' with {num_envs} active environments.")
+                        print(f"    Current registry: {registered_workers} (Total active envs: {sum(registered_workers.values())})")
+                        
+                        # Send confirmation
+                        router_socket.send(identity, zmq.SNDMORE)
+                        router_socket.send(b"", zmq.SNDMORE)
+                        router_socket.send_pyobj({"status": "ok"})
+                    else:
+                        # Reply wait to early get_model requests
+                        router_socket.send(identity, zmq.SNDMORE)
+                        router_socket.send(b"", zmq.SNDMORE)
+                        router_socket.send_pyobj({"status": "wait"})
+                except Exception as e:
+                    pass
+
+    reg_thread = threading.Thread(target=handle_registration, daemon=True)
+    reg_thread.start()
+
+    print("\n" + "="*60)
+    print(" ZMQ MASTER DYNAMIC REGISTRATION PHASE")
+    print("="*60)
+    print("Please start all worker scripts on workstations.")
+    print("They will automatically detect valid environments and register here.")
+    print("="*60 + "\n")
+
+    # Blocking input in the front to confirm the network topology
+    while True:
+        user_choice = input("Are all workers registered? Type 'yes' to confirm and start: ").strip().lower()
+        if user_choice == "yes":
+            with registration_lock:
+                if not registered_workers:
+                    print("[!] No workers registered yet. Please start workers first.")
+                    continue
+                break
+
+    # Finalize registration
+    registration_active = False
+    reg_thread.join(timeout=1.0)
+
+    with registration_lock:
+        num_workers = len(registered_workers)
+        total_envs = sum(registered_workers.values())
+        worker_details = str(registered_workers)
+
+    print(f"\n[+] Registration Finalized: {num_workers} workers with active environments details: {worker_details}")
+    print(f"[+] Total expected active environments = {total_envs}")
+    print("="*60 + "\n")
+
+    # Dynamic calculation of min successful envs
+    min_success_envs = max(1, int(total_envs * 0.75))
+
+    # Unified Event Loop Poller
+    poller = zmq.Poller()
+    poller.register(router_socket, zmq.POLLIN)
+    poller.register(pull_socket, zmq.POLLIN)
+
     # ── WandB Initialization ──────────────────────────────────────────────────
     config = {
         "architecture": "Distributed PPO via ZMQ",
@@ -237,14 +325,13 @@ def main():
         "ent_coef": args.ent_coef,
         "n_steps": 512,
         "batch_size": 128,
-        "total_envs": args.total_envs,
-        "min_success_envs": args.min_success_envs,
+        "total_envs": total_envs,
+        "min_success_envs": min_success_envs,
         "global_timeout": args.global_timeout,
         "grace_timeout": args.grace_timeout,
         "resumed_from": resume_path,
     }
     
-    # Configure and create WandB directory inside WORKSPACE_ROOT
     WANDB_DIR = os.path.join(WORKSPACE_ROOT, "wandb")
     os.makedirs(WANDB_DIR, exist_ok=True)
     
@@ -261,24 +348,6 @@ def main():
         
     run = wandb.init(**wandb_kwargs)
     print(f"[*] WandB run initialized. Run ID: {run.id}")
-    
-    # ── ZMQ Setup ─────────────────────────────────────────────────────────────
-    zmq_context = zmq.Context()
-    
-    # ROUTER allows non-blocking synchronous queries from standard REQ clients
-    router_socket = zmq_context.socket(zmq.ROUTER)
-    router_socket.bind(f"tcp://{args.host}:{args.rep_port}")
-    
-    # PULL gathers episodic data pushed by workers asynchronously
-    pull_socket = zmq_context.socket(zmq.PULL)
-    pull_socket.bind(f"tcp://{args.host}:{args.pull_port}")
-    
-    # Unified Event Loop Poller
-    poller = zmq.Poller()
-    poller.register(router_socket, zmq.POLLIN)
-    poller.register(pull_socket, zmq.POLLIN)
-    
-    print(f"[*] ZMQ Master sockets bound. ROUTER (model sync): port {args.rep_port} | PULL (data sync): port {args.pull_port}")
     
     # ── Training & Orchestration Loop ─────────────────────────────────────────
     round_idx = 0
@@ -304,8 +373,6 @@ def main():
         while round_idx < args.total_rounds and total_steps_trained < args.total_steps:
             print(f"\n==================== ROUND {round_idx} ====================")
             
-            # Determine round mode
-            # Evaluation runs in round 2, and then every eval_interval (30, 60, 90...)
             is_eval_round = (round_idx == 2) or (round_idx > 0 and round_idx % args.eval_interval == 0)
             mode = "evaluate" if is_eval_round else "train"
             print(f"[*] Mode for this round: {mode.upper()}")
@@ -338,22 +405,32 @@ def main():
                 socks = dict(poller.poll(100))
                 
                 # A. Handle Model Weight Sync (ROUTER)
-                # Any worker requesting weights gets the serialized current weights immediately
                 if router_socket in socks:
                     try:
                         identity = router_socket.recv()
                         empty = router_socket.recv()
                         msg = router_socket.recv_pyobj()
                         
-                        # Reply back to REQ client
-                        router_socket.send(identity, zmq.SNDMORE)
-                        router_socket.send(b"", zmq.SNDMORE)
-                        router_socket.send_pyobj({
-                            "status": "ok",
-                            "round": round_idx,
-                            "mode": mode,
-                            "weights": weights_bytes
-                        })
+                        event = msg.get("event")
+                        if event == "register_worker":
+                            # Support late registration/reconnection gracefully
+                            w_id = msg.get("workstation")
+                            num_envs = msg.get("num_envs", 0)
+                            print(f"[+] Re-registered worker '{w_id}' with {num_envs} envs.")
+                            # Send reply
+                            router_socket.send(identity, zmq.SNDMORE)
+                            router_socket.send(b"", zmq.SNDMORE)
+                            router_socket.send_pyobj({"status": "ok"})
+                        else:
+                            # Standard get_model request
+                            router_socket.send(identity, zmq.SNDMORE)
+                            router_socket.send(b"", zmq.SNDMORE)
+                            router_socket.send_pyobj({
+                                "status": "ok",
+                                "round": round_idx,
+                                "mode": mode,
+                                "weights": weights_bytes
+                            })
                     except Exception as e:
                         print(f"[!] ROUTER sync error: {e}")
                         
@@ -369,23 +446,22 @@ def main():
                             
                         reports.append(report)
                         
-                        # Count successes based on event/status
                         if mode == "evaluate":
                             success_reports = [r for r in reports if r.get("event") == "eval_report" and r.get("status") == "success"]
                         else:
                             success_reports = [r for r in reports if r.get("event") == "env_report" and r.get("status") == "success"]
                             
                         success_count = len(success_reports)
-                        print(f"    -> Received {len(reports)}/{args.total_envs} reports from workers "
+                        print(f"    -> Received {len(reports)}/{total_envs} reports from workers "
                               f"(latest from: {report.get('workstation')} - {report.get('status')}). Success count: {success_count}")
                         
                         # Complete early if all expected reports are gathered
-                        if len(reports) >= args.total_envs:
-                            print("[*] All expected environment reports received.")
+                        if len(reports) >= total_envs:
+                            print(f"[*] All {total_envs} expected environment reports received.")
                             break
                             
-                        # Grace countdown starts if success count reaches threshold (15)
-                        if success_count >= args.min_success_envs and grace_start_time is None:
+                        # Grace countdown starts if success count reaches threshold
+                        if success_count >= min_success_envs and grace_start_time is None:
                             print(f"[*] Reached {success_count} success reports. Starting {args.grace_timeout}s grace countdown!")
                             grace_start_time = time.time()
                             
@@ -399,7 +475,7 @@ def main():
                 success_evals = [r for r in reports if r.get("event") == "eval_report" and r.get("status") == "success"]
                 eval_count = len(success_evals)
                 
-                print(f"\n[Eval Round Results] Successfully collected deterministic evaluation runs for {eval_count}/{args.total_envs} emulators.")
+                print(f"\n[Eval Round Results] Successfully collected deterministic evaluation runs for {eval_count}/{total_envs} emulators.")
                 
                 if eval_count > 0:
                     eval_reward_mean = np.mean([r["reward"] for r in success_evals])
@@ -407,13 +483,12 @@ def main():
                     print(f"    -> Mean Evaluation Reward: {eval_reward_mean:.2f}")
                     print(f"    -> Mean Evaluation Length: {eval_len_mean:.1f}")
                     
-                    # Log evaluation metrics to WandB
                     wandb.log({
                         "round": round_idx,
                         "eval/reward_mean": eval_reward_mean,
                         "eval/length_mean": eval_len_mean,
                         "eval/success_count": eval_count,
-                        "eval/failed_count": len(reports) - eval_count,
+                        "eval/failed_count": total_envs - eval_count,
                         "perf/data_collect_time_s": data_collect_time
                     }, step=round_idx)
                 else:
@@ -421,25 +496,23 @@ def main():
                     wandb.log({
                         "round": round_idx,
                         "eval/success_count": 0,
-                        "eval/failed_count": len(reports),
+                        "eval/failed_count": total_envs,
                         "perf/data_collect_time_s": data_collect_time
                     }, step=round_idx)
                     
             else:  # "train" mode
                 success_trains = [r for r in reports if r.get("event") == "env_report" and r.get("status") == "success"]
                 train_count = len(success_trains)
-                success_rate = train_count / args.total_envs
+                success_rate = train_count / total_envs
                 
-                # Dynamic steps count from variable episode lengths
                 total_steps_collected = sum(len(r["data"]["rewards"]) for r in success_trains) if train_count > 0 else 0
                 total_steps_trained += total_steps_collected
                 total_steps_remaining = max(0, args.total_steps - total_steps_trained)
                 
-                # Steps per second data throughput rate
                 data_collect_rate = total_steps_collected / data_collect_time if data_collect_time > 0 else 0.0
                 
                 print(f"\n[Data Collection Summary]")
-                print(f"    -> Success Envs: {train_count}/{args.total_envs} ({success_rate * 100:.1f}%)")
+                print(f"    -> Success Envs: {train_count}/{total_envs} ({success_rate * 100:.1f}%)")
                 print(f"    -> Steps Collected: {total_steps_collected} steps")
                 print(f"    -> Cumulative Steps: {total_steps_trained} / {args.total_steps} steps ({total_steps_remaining} remaining)")
                 print(f"    -> Collection Time: {data_collect_time:.2f} seconds")
@@ -451,7 +524,6 @@ def main():
                     print(f"[*] Ingesting {train_count} environment trajectories into RolloutBuffer...")
                     start_update_time = time.time()
                     
-                    # Dynamically update learning rate progress decay matching step count progress
                     model._current_progress_remaining = max(0.0, total_steps_remaining / args.total_steps)
                     
                     train_ppo_on_episodes(model, success_trains)
@@ -459,12 +531,11 @@ def main():
                     model_updating_time = time.time() - start_update_time
                     print(f"[*] PPO Update Complete. Update Time: {model_updating_time:.2f} seconds")
                     
-                    # Log metrics to WandB
                     avg_reward = np.mean([r["data"]["episode_reward"] for r in success_trains])
                     metrics = {
                         "round": round_idx,
                         "env/success_count": train_count,
-                        "env/failed_count": len(reports) - train_count,
+                        "env/failed_count": total_envs - train_count,
                         "env/success_rate": success_rate,
                         "env/avg_reward": avg_reward,
                         "env/total_steps_trained": total_steps_trained,
@@ -472,7 +543,6 @@ def main():
                         "perf/data_collect_time_s": data_collect_time,
                         "perf/data_collect_rate_fps": data_collect_rate,
                         "perf/model_updating_time_s": model_updating_time,
-                        # SB3 Internal PPO Logging Metrics
                         "train/loss": model.logger.name_to_value.get("train/loss", 0),
                         "train/policy_gradient_loss": model.logger.name_to_value.get("train/policy_gradient_loss", 0),
                         "train/value_loss": model.logger.name_to_value.get("train/value_loss", 0),
@@ -484,7 +554,7 @@ def main():
                     metrics = {
                         "round": round_idx,
                         "env/success_count": 0,
-                        "env/failed_count": len(reports),
+                        "env/failed_count": total_envs,
                         "env/success_rate": 0.0,
                         "env/total_steps_trained": total_steps_trained,
                         "env/total_steps_remaining": total_steps_remaining,
