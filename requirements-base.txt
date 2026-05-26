@@ -5,5 +5,4 @@ flask
 gymnasium
 stable-baselines3
 wandb
-ray[rllib]
 pyzmq
