@@ -102,41 +102,59 @@ def reboot_emulator_and_scrcpy(emu, env, device_serial, scrcpy_port):
     """
     Hard kill the emulator process, restart it directly from the game_ready snapshot,
     wait for boot completion, and re-establish the ScrcpyClient stream.
+    Retries infinitely until the emulator is successfully booted, scrcpy is connected,
+    and verified to be in the 'pause' screen.
     """
-    print(f"\n[!] [{device_serial}] Rebooting emulator process on port {emu.port}...")
-    emu.stop()
-    time.sleep(2.0)
-    emu.start()
-    
-    print(f"[{device_serial}] Waiting for reboot and boot completion...")
-    cmd_bash = f'until adb -s {device_serial} shell getprop sys.boot_completed 2>/dev/null | grep -q "1"; do sleep 1; done'
-    subprocess.run(["bash", "-c", cmd_bash])
-    
-    if env.client:
+    attempt = 1
+    while True:
         try:
-            env.client.stop()
-        except Exception:
-            pass
+            print(f"\n[!] [{device_serial}] Rebooting emulator process on port {emu.port} (Attempt {attempt})...")
+            emu.stop()
+            time.sleep(2.0)
+            emu.start()
             
-    env.frame_history.clear()
-    
-    print(f"[{device_serial}] Re-initializing ScrcpyClient...")
-    from scrcpy_client import ScrcpyClient
-    env.client = ScrcpyClient(max_size=584, port=scrcpy_port, device_serial=device_serial)
-    env.client.start()
-    
-    while env.client.get_frame() is None:
-        time.sleep(0.1)
-        
-    print(f"[{device_serial}] Emulator reboot complete and ScrcpyClient re-connected!")
-
-    # Sanity check: verify the screen state is strictly 'pause'
-    from validate_env import get_current_state
-    frame = env.client.get_frame()
-    state = get_current_state(frame)
-    if state != "pause":
-        print(f"[!] FATAL: Emulator {device_serial} is not on the PAUSE screen after reboot! (detected state: '{state}'). Exiting script...")
-        sys.exit(1)
+            print(f"[{device_serial}] Waiting for reboot and boot completion...")
+            cmd_bash = f'until adb -s {device_serial} shell getprop sys.boot_completed 2>/dev/null | grep -q "1"; do sleep 1; done'
+            subprocess.run(["bash", "-c", cmd_bash], check=True)
+            
+            if env.client:
+                try:
+                    env.client.stop()
+                except Exception:
+                    pass
+                    
+            env.frame_history.clear()
+            
+            print(f"[{device_serial}] Re-initializing ScrcpyClient...")
+            from scrcpy_client import ScrcpyClient
+            env.client = ScrcpyClient(max_size=584, port=scrcpy_port, device_serial=device_serial)
+            env.client.start()
+            
+            # Connect with a timeout of 15 seconds to prevent hanging infinitely on a single scrcpy connection attempt
+            scrcpy_wait_start = time.time()
+            frame = None
+            while time.time() - scrcpy_wait_start < 15.0:
+                frame = env.client.get_frame()
+                if frame is not None:
+                    break
+                time.sleep(0.1)
+                
+            if frame is None:
+                raise RuntimeError("Timed out waiting for Scrcpy frame")
+                
+            # Verify the screen state is strictly 'pause'
+            from validate_env import get_current_state
+            state = get_current_state(frame)
+            if state != "pause":
+                raise RuntimeError(f"Emulator is not on the PAUSE screen (detected state: '{state}')")
+                
+            print(f"[{device_serial}] Emulator reboot complete and verified in PAUSE screen!")
+            break  # Success!
+            
+        except Exception as e:
+            print(f"[!] [{device_serial}] Reboot attempt {attempt} failed: {e}. Retrying in 5 seconds...")
+            attempt += 1
+            time.sleep(5.0)
 
 
 def navigate_to_pause(emu, env, device_serial, scrcpy_port):
@@ -502,8 +520,8 @@ def main():
             frame = env.client.get_frame()
             state = get_current_state(frame)
             if state != "pause":
-                print(f"[!] FATAL: Emulator {device_serial} is not on the PAUSE screen at startup! (detected state: '{state}'). Exiting script...")
-                sys.exit(1)
+                print(f"[!] Warning: Emulator {device_serial} is not on the PAUSE screen at startup! (detected state: '{state}'). Rebooting to fix...")
+                reboot_emulator_and_scrcpy(emulators[rank], env, device_serial, scrcpy_port)
 
             envs[rank] = env
             active_ranks.append(rank)
