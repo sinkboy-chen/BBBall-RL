@@ -446,7 +446,7 @@ def main():
                         else:
                             success_reports = [r for r in reports if r.get("event") == "env_report" and r.get("status") == "success"]
                             
-                        unique_successes = {r.get("emulator") for r in success_reports if r.get("emulator")}
+                        unique_successes = {f"{r.get('workstation')}_{r.get('emulator')}" for r in success_reports if r.get('workstation') and r.get('emulator')}
                         success_count = len(unique_successes)
                         print(f"    -> Received {len(reports)}/{total_envs} reports from workers "
                               f"(latest from: {report.get('workstation')} - {report.get('status')}). Success count: {success_count}")
