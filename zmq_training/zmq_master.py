@@ -372,6 +372,7 @@ def main():
     try:
         while round_idx < args.total_rounds and total_steps_trained < args.total_steps:
             print(f"\n==================== ROUND {round_idx} ====================")
+            round_start_time = time.time()
             
             is_eval_round = (round_idx == 2) or (round_idx > 0 and round_idx % args.eval_interval == 0)
             mode = "evaluate" if is_eval_round else "train"
@@ -497,7 +498,8 @@ def main():
                         "eval/success_count": eval_count,
                         "eval/failed_count": total_envs - eval_count,
                         "perf/data_collect_time_s": data_collect_time,
-                        "perf/model_distribution_time_s": distribution_duration
+                        "perf/model_distribution_time_s": distribution_duration,
+                        "perf/round_time_s": time.time() - round_start_time
                     }, step=round_idx)
                 else:
                     print("[!] Warning: All evaluation emulators failed or timed out!")
@@ -506,7 +508,8 @@ def main():
                         "eval/success_count": 0,
                         "eval/failed_count": total_envs,
                         "perf/data_collect_time_s": data_collect_time,
-                        "perf/model_distribution_time_s": distribution_duration
+                        "perf/model_distribution_time_s": distribution_duration,
+                        "perf/round_time_s": time.time() - round_start_time
                     }, step=round_idx)
                     
             else:  # "train" mode
@@ -553,6 +556,7 @@ def main():
                         "perf/data_collect_rate_fps": data_collect_rate,
                         "perf/model_updating_time_s": model_updating_time,
                         "perf/model_distribution_time_s": distribution_duration,
+                        "perf/round_time_s": time.time() - round_start_time,
                         "train/loss": model.logger.name_to_value.get("train/loss", 0),
                         "train/policy_gradient_loss": model.logger.name_to_value.get("train/policy_gradient_loss", 0),
                         "train/value_loss": model.logger.name_to_value.get("train/value_loss", 0),
@@ -571,6 +575,7 @@ def main():
                         "perf/data_collect_time_s": data_collect_time,
                         "perf/data_collect_rate_fps": 0.0,
                         "perf/model_distribution_time_s": distribution_duration,
+                        "perf/round_time_s": time.time() - round_start_time,
                     }
                 
                 wandb.log(metrics, step=round_idx)
