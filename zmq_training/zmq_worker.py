@@ -20,54 +20,132 @@ from stable_baselines3 import PPO
 USER = os.environ.get("USER", "student")
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "env_scripts"))
 
+# ── Emulator Environment Setup ───────────────────────────────────────────────
+ANDROID_HOME = f"/tmp2/{USER}/DRL_final_workspace/android-sdk"
+ENV_VARS = {
+    "ANDROID_HOME": ANDROID_HOME,
+    "ANDROID_SDK_ROOT": ANDROID_HOME,
+    "ANDROID_USER_HOME": f"/tmp2/{USER}/DRL_final_workspace/.android",
+    "ANDROID_AVD_HOME": f"/tmp2/{USER}/DRL_final_workspace/.android/avd",
+    "ANDROID_EMULATOR_HOME": f"/tmp2/{USER}/DRL_final_workspace/.android",
+}
 
-def hard_reset_to_pause(env, device_serial, scrcpy_port):
+# Update PATH for emulator processes
+emu_env = os.environ.copy()
+emu_env.update(ENV_VARS)
+emu_env["PATH"] = f"{emu_env.get('PATH', '')}:{ANDROID_HOME}/cmdline-tools/latest/bin:{ANDROID_HOME}/platform-tools:{ANDROID_HOME}/emulator"
+
+
+class EmulatorInstance:
     """
-    Load snapshot 'game_ready' and re-establish the ScrcpyClient connection.
-    This lands the emulator directly on the Pause screen (as in the snapshot).
+    Manages the lifecycle of a single headless Android Emulator.
+    Restarts automatically if it crashes unexpectedly.
     """
-    print(f"[{device_serial}] Custom hard reset: loading snapshot 'game_ready'...")
+    def __init__(self, port, avd_name="pixel5_api31", snapshot="game_ready"):
+        self.port = port
+        self.avd_name = avd_name
+        self.snapshot = snapshot
+        self.serial = f"emulator-{port}"
+        self.process = None
+        self._stop_requested = False
+        self.thread = None
+
+    def start(self):
+        self._stop_requested = False
+        self.thread = threading.Thread(target=self._run_loop, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        self._stop_requested = True
+        if self.process:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+        # Fallback console kill
+        subprocess.run(["adb", "-s", self.serial, "emu", "kill"], env=emu_env, capture_output=True)
+
+    def _run_loop(self):
+        while not self._stop_requested:
+            tmp_dir = f"/tmp2/{USER}/DRL_final_workspace/tmp/emu_{self.port}"
+            os.makedirs(tmp_dir, exist_ok=True)
+            
+            print(f"[*] Starting emulator {self.serial} on port {self.port} from snapshot '{self.snapshot}'...")
+            instance_env = emu_env.copy()
+            instance_env["ANDROID_TMP"] = tmp_dir
+            cmd = [
+                "emulator",
+                "-avd", self.avd_name,
+                "-port", str(self.port),
+                "-no-window",
+                "-no-audio",
+                "-no-boot-anim",
+                "-gpu", "swiftshader_indirect",
+                "-no-metrics",
+                "-read-only",
+                "-snapshot", self.snapshot
+            ]
+            self.process = subprocess.Popen(cmd, env=instance_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.process.wait()
+            
+            if self._stop_requested:
+                break
+                
+            print(f"[!] Warning: Emulator {self.serial} died unexpectedly! Restarting in 5 seconds...")
+            time.sleep(5)
+
+
+# ── Environment Helper Functions ─────────────────────────────────────────────
+
+def reboot_emulator_and_scrcpy(emu, env, device_serial, scrcpy_port):
+    """
+    Hard kill the emulator process, restart it directly from the game_ready snapshot,
+    wait for boot completion, and re-establish the ScrcpyClient stream.
+    """
+    print(f"\n[!] [{device_serial}] Rebooting emulator process on port {emu.port}...")
+    emu.stop()
+    time.sleep(2.0)
+    emu.start()
+    
+    print(f"[{device_serial}] Waiting for reboot and boot completion...")
+    cmd_bash = f'until adb -s {device_serial} shell getprop sys.boot_completed 2>/dev/null | grep -q "1"; do sleep 1; done'
+    subprocess.run(["bash", "-c", cmd_bash])
+    
     if env.client:
         try:
             env.client.stop()
         except Exception:
             pass
-
-    try:
-        cmd = ["adb"]
-        if device_serial:
-            cmd += ["-s", device_serial]
-        cmd += ["emu", "avd", "snapshot", "load", "game_ready"]
-        subprocess.run(cmd, check=True)
-    except subprocess.CalledProcessError as e:
-        print(f"[!] [{device_serial}] Custom Hard Reset Failed: {e}")
-
-    print(f"[{device_serial}] Waiting for Android boot to complete...")
-    cmd_bash = f'until adb -s {device_serial} shell getprop sys.boot_completed 2>/dev/null | grep -q "1"; do sleep 1; done'
-    subprocess.run(["bash", "-c", cmd_bash])
-
-    # Clear frame history queue
+            
     env.frame_history.clear()
-
+    
     print(f"[{device_serial}] Re-initializing ScrcpyClient...")
     from scrcpy_client import ScrcpyClient
     env.client = ScrcpyClient(max_size=584, port=scrcpy_port, device_serial=device_serial)
     env.client.start()
-
+    
     while env.client.get_frame() is None:
         time.sleep(0.1)
+        
+    print(f"[{device_serial}] Emulator reboot complete and ScrcpyClient re-connected!")
 
-    print(f"[{device_serial}] ScrcpyClient successfully connected after snapshot load.")
+    # Sanity check: verify the screen state is strictly 'pause'
+    from validate_env import get_current_state
+    frame = env.client.get_frame()
+    state = get_current_state(frame)
+    if state != "pause":
+        print(f"[!] FATAL: Emulator {device_serial} is not on the PAUSE screen after reboot! (detected state: '{state}'). Exiting script...")
+        sys.exit(1)
 
 
-def navigate_to_pause(env, device_serial, scrcpy_port):
+def navigate_to_pause(emu, env, device_serial, scrcpy_port):
     """
     Navigate from whatever screen to the Pause screen.
-    If soft navigation fails, falls back to hard snapshot load.
+    If soft navigation fails, falls back to completely rebooting the emulator process.
     """
     from validate_env import get_current_state, perform_tap, wait_for_state
 
-    # Release any ongoing touches
     env.client.touch_up(396, 173)
     time.sleep(0.1)
 
@@ -96,14 +174,11 @@ def navigate_to_pause(env, device_serial, scrcpy_port):
             success = False
 
     if not success:
-        print(f"[{device_serial}] Soft reset to pause failed. Falling back to hard reset...")
-        hard_reset_to_pause(env, device_serial, scrcpy_port)
+        print(f"[{device_serial}] Soft reset to pause failed. Falling back to completely rebooting the emulator process...")
+        reboot_emulator_and_scrcpy(emu, env, device_serial, scrcpy_port)
 
 
 def prepare_obs_for_game(env):
-    """
-    Reset internal tracking parameters and prepare the initial stacked observation.
-    """
     env.score_tracker.reset()
     env.last_score = {"left": 0, "right": 0}
     env.last_action = 0
@@ -126,12 +201,12 @@ def prepare_obs_for_game(env):
     return obs_dict
 
 
-def run_persistent_env_for_rank(workstation_id, rank, env, master_ip, push_port,
+def run_persistent_env_for_rank(workstation_id, rank, emu, env, master_ip, push_port,
                                 round_config, start_event, done_event, shutdown_event,
                                 save_video=False):
     """
-    Long-lived thread target for a single emulator. Reuse the BBBallEnv instance created at startup.
-    Starts on Pause screen -> Taps Rematch -> Collects Rollout -> Returns to Pause screen.
+    Long-lived thread target for a single emulator. Starts on Pause screen -> Taps Rematch -> Collects Rollout.
+    Monitors rollout step count. If steps > 500, reboots the emulator and restarts the rollout to prevent desync hangs.
     """
     device_serial = f"emulator-{5554 + 2 * rank}"
     scrcpy_port = 27183 + rank
@@ -156,23 +231,20 @@ def run_persistent_env_for_rank(workstation_id, rank, env, master_ip, push_port,
             try:
                 print(f"[{device_serial}] Round {round_idx} starting ({mode.upper()})...")
 
-                # The environment MUST start on the pause screen.
-                # Double-check and force-navigate if needed.
                 from validate_env import get_current_state, perform_tap, wait_for_state
                 
                 frame = env.client.get_frame()
                 state = get_current_state(frame)
                 if state != "pause":
                     print(f"[{device_serial}] Warning: Not on Pause screen at round start (detected '{state}'). Navigating...")
-                    navigate_to_pause(env, device_serial, scrcpy_port)
+                    navigate_to_pause(emu, env, device_serial, scrcpy_port)
 
                 # Tap Rematch Button to start fresh Q1 game
                 perform_tap(env.client, 346, 193, "Rematch Button")
                 
                 if not wait_for_state(env.client, "game", timeout=10):
-                    print(f"[!] [{device_serial}] Failed to reach Game screen after Rematch. Hard resetting...")
-                    hard_reset_to_pause(env, device_serial, scrcpy_port)
-                    # Try rematch again after hard reset
+                    print(f"[!] [{device_serial}] Failed to reach Game screen after Rematch. Completely rebooting the emulator process...")
+                    reboot_emulator_and_scrcpy(emu, env, device_serial, scrcpy_port)
                     perform_tap(env.client, 346, 193, "Rematch Button")
                     wait_for_state(env.client, "game")
 
@@ -255,6 +327,27 @@ def run_persistent_env_for_rank(workstation_id, rank, env, master_ip, push_port,
                             except Exception as e:
                                 print(f"[!] [{device_serial}] Failed to save debug video: {e}")
 
+                        # ── Self-Healing: Check if emulator is stuck in Q1 ──
+                        if step > 500:
+                            print(f"\n[!] [{device_serial}] Rollout exceeded 500 steps! Game is stuck. Rebooting emulator...")
+                            reboot_emulator_and_scrcpy(emu, env, device_serial, scrcpy_port)
+                            
+                            # Reset rollout collections completely for this round
+                            obs_images.clear()
+                            obs_last_actions.clear()
+                            actions.clear()
+                            rewards.clear()
+                            episode_starts.clear()
+                            episode_reward = 0.0
+                            next_is_start = True
+                            step = 0
+                            obs_dict = prepare_obs_for_game(env)
+                            
+                            # Start fresh episode collection
+                            perform_tap(env.client, 346, 193, "Rematch Button")
+                            wait_for_state(env.client, "game")
+                            continue
+
                         if terminated or truncated:
                             break
 
@@ -278,8 +371,7 @@ def run_persistent_env_for_rank(workstation_id, rank, env, master_ip, push_port,
                     print(f"[{device_serial}] Episode complete. Pushed {step} steps. Reward: {episode_reward:.2f}")
 
                 # ── Post-Episode Navigation to Pause Screen ──
-                # Navigate back to Pause screen so we are ready for the next round immediately.
-                navigate_to_pause(env, device_serial, scrcpy_port)
+                navigate_to_pause(emu, env, device_serial, scrcpy_port)
                 print(f"[{device_serial}] Ready for next round (idling on PAUSE screen).")
 
             except Exception as e:
@@ -349,31 +441,57 @@ def main():
         device="cpu"
     )
 
-    # ── Sequential Environment Startup (Connect Scrcpy Sequentially) ─────────
+    # ── Sequential Emulator Process Startup (Staggered by 8 Seconds) ─────────
     NUM_ENVS = 3
+    emulators = {}
+
+    # Pre-cleanup: kill any stale emulators running on these ports
+    for rank in range(NUM_ENVS):
+        serial = f"emulator-{5554 + 2 * rank}"
+        print(f"[*] Pre-cleanup: killing stale {serial} if any...")
+        subprocess.run(["adb", "-s", serial, "emu", "kill"], env=emu_env, capture_output=True)
+
+    print(f"\n[*] Starting {NUM_ENVS} emulators sequentially with an 8-second stagger...")
+    for rank in range(NUM_ENVS):
+        port = 5554 + 2 * rank
+        emu = EmulatorInstance(port)
+        emulators[rank] = emu
+        emu.start()
+        # Stagger startups by 8 seconds to prevent CPU and disk I/O spikes
+        time.sleep(8.0)
+
+    # ── Sequential Environment Scrcpy Connections ────────────────────────────
     active_ranks = []
     envs = {}
 
-    print(f"[*] Initializing {NUM_ENVS} environments sequentially...")
+    print(f"\n[*] Connecting to {NUM_ENVS} environments sequentially...")
     for rank in range(NUM_ENVS):
         device_serial = f"emulator-{5554 + 2 * rank}"
         scrcpy_port = 27183 + rank
 
         try:
-            print(f"\n[*] Sequential Startup: Rank {rank} ({device_serial}) on port {scrcpy_port}...")
+            print(f"\n[*] Connecting: Rank {rank} ({device_serial}) on port {scrcpy_port}...")
             # Pre-cleanup stale adb forwards
             subprocess.run(["adb", "-s", device_serial, "forward", "--remove", f"tcp:{scrcpy_port}"], capture_output=True)
 
-            # Import inside loop to prevent side effects
+            print(f"[{device_serial}] Waiting for Android boot to complete...")
+            cmd_bash = f'until adb -s {device_serial} shell getprop sys.boot_completed 2>/dev/null | grep -q "1"; do sleep 1; done'
+            subprocess.run(["bash", "-c", cmd_bash])
+
             from bbball_env import BBBallEnv
             env = BBBallEnv(device_serial=device_serial, scrcpy_port=scrcpy_port)
 
-            # Bring env to Pause screen immediately
-            navigate_to_pause(env, device_serial, scrcpy_port)
+            # Sanity check: verify the screen state is strictly 'pause'
+            from validate_env import get_current_state
+            frame = env.client.get_frame()
+            state = get_current_state(frame)
+            if state != "pause":
+                print(f"[!] FATAL: Emulator {device_serial} is not on the PAUSE screen at startup! (detected state: '{state}'). Exiting script...")
+                sys.exit(1)
 
             envs[rank] = env
             active_ranks.append(rank)
-            print(f"[+] Rank {rank} ({device_serial}) successfully initialized and placed in PAUSE screen.")
+            print(f"[+] Rank {rank} ({device_serial}) successfully connected and verified in PAUSE screen.")
 
         except Exception as e:
             print(f"[!] Rank {rank} ({device_serial}) failed to initialize. Skipping it. Error: {e}")
@@ -386,10 +504,15 @@ def main():
             continue
 
     num_valid_envs = len(active_ranks)
-    print(f"\n[*] Sequential Startup complete. Valid environments initialized: {num_valid_envs} / {NUM_ENVS}")
+    print(f"\n[*] Startup complete. Valid environments connected: {num_valid_envs} / {NUM_ENVS}")
     
     if num_valid_envs == 0:
         print("[!] Fatal: Zero active environments available. Worker shutting down.")
+        for emu in emulators.values():
+            try:
+                emu.stop()
+            except Exception:
+                pass
         zmq_context.term()
         sys.exit(1)
 
@@ -418,7 +541,7 @@ def main():
     for rank in active_ranks:
         t = threading.Thread(
             target=run_persistent_env_for_rank,
-            args=(workstation_id, rank, envs[rank], args.master_ip, args.push_port,
+            args=(workstation_id, rank, emulators[rank], envs[rank], args.master_ip, args.push_port,
                   round_configs[rank], start_events[rank], done_events[rank],
                   shutdown_event, args.save_video),
             daemon=True
@@ -482,7 +605,6 @@ def main():
             print(f"[*] Waiting for {num_valid_envs} envs to complete round {master_round}...")
             active_ranks_waiting = list(active_ranks)
             
-            # Map ranks to thread objects for is_alive checking
             rank_to_thread = {active_ranks[i]: threads[i] for i in range(num_valid_envs)}
             
             while active_ranks_waiting:
@@ -513,6 +635,13 @@ def main():
         for rank, env in envs.items():
             try:
                 env.close()
+            except Exception:
+                pass
+        # Stop all emulator instances
+        print("[*] Stopping all emulators...")
+        for emu in emulators.values():
+            try:
+                emu.stop()
             except Exception:
                 pass
         zmq_context.term()

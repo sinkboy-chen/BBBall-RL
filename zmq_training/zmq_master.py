@@ -386,21 +386,6 @@ def main():
             
             # Continuous polling loop for weights sync and data collection
             while True:
-                current_time = time.time()
-                elapsed = current_time - start_collect_time
-                
-                # 1. Global collection timeout check
-                if elapsed >= args.global_timeout:
-                    print(f"[!] Global collection timeout ({args.global_timeout}s) reached! Stopping collection.")
-                    break
-                    
-                # 2. Grace timer check
-                if grace_start_time is not None:
-                    grace_elapsed = current_time - grace_start_time
-                    if grace_elapsed >= args.grace_timeout:
-                        print(f"[*] Grace timeout ({args.grace_timeout}s) reached! Stopping collection.")
-                        break
-                        
                 # Poll sockets with a 100ms timeout
                 socks = dict(poller.poll(100))
                 
@@ -461,19 +446,15 @@ def main():
                         else:
                             success_reports = [r for r in reports if r.get("event") == "env_report" and r.get("status") == "success"]
                             
-                        success_count = len(success_reports)
+                        unique_successes = {r.get("emulator") for r in success_reports if r.get("emulator")}
+                        success_count = len(unique_successes)
                         print(f"    -> Received {len(reports)}/{total_envs} reports from workers "
                               f"(latest from: {report.get('workstation')} - {report.get('status')}). Success count: {success_count}")
                         
-                        # Complete early if all expected reports are gathered
-                        if len(reports) >= total_envs:
-                            print(f"[*] All {total_envs} expected environment reports received.")
+                        # Complete ONLY when 100% of all registered active environments have returned success
+                        if success_count >= total_envs:
+                            print(f"[*] All {total_envs} expected environment reports successfully received!")
                             break
-                            
-                        # Grace countdown starts if success count reaches threshold
-                        if success_count >= min_success_envs and grace_start_time is None:
-                            print(f"[*] Reached {success_count} success reports. Starting {args.grace_timeout}s grace countdown!")
-                            grace_start_time = time.time()
                             
                     except Exception as e:
                         print(f"[!] PULL parse error: {e}")
