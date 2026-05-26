@@ -621,9 +621,10 @@ def main():
     parser.add_argument("-p", "--port", type=int, default=5000, help="Flask port (default 5000)")
     parser.add_argument("--max-size", type=int, default=480, help="Max video dimension (default 480)")
     parser.add_argument("--scrcpy-port", type=int, default=27183, help="scrcpy tunnel port")
+    parser.add_argument("-s", "--device-serial", type=str, default=None, help="ADB device serial")
     args = parser.parse_args()
 
-    client = ScrcpyClient(max_size=args.max_size, port=args.scrcpy_port)
+    client = ScrcpyClient(max_size=args.max_size, port=args.scrcpy_port, device_serial=args.device_serial)
 
     def shutdown(sig, frame):
         client.stop()
