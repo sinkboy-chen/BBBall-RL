@@ -1,76 +1,88 @@
 # BBBall-RL
-Let reinforcement learning agent master Bouncy Basketball android game.
 
-## Distributed Learning PPO env setup
-1. install android tools for each cpu server
-2. install scrcpy for each cpu server
-3. make python env and install packages for cpu and gpu server
-4. run master script on gpu server
-5. run worker script on cpu server
+Let a reinforcement learning agent master the Bouncy Basketball Android game.
 
-## Distributed Learning method
-Using 9 cpu (worker) and 1 gpu (master) workstation from NTU CSIE.
+## Distributed Learning PPO Environment Setup
 
-Because of the thread limit of student user account, opening 3 android emulator on each cpu workstation is a suitable choice.
+1. Install Android tools on each CPU server.
+2. Install scrcpy on each CPU server.
+3. Create a Python environment and install packages on both CPU and GPU servers.
+4. Run the master script on the GPU server.
+5. Run the worker script on the CPU servers.
 
-The transmission of model weight and env data is through python zmq library.
+## Distributed Learning Method
+
+Using 9 CPU (worker) workstations and 1 GPU (master) workstation from NTU CSIE.
+
+Because of the thread limit on student user accounts, running 3 Android emulators on each CPU workstation is a suitable choice.
+
+The transmission of model weights and environment data is done through the Python zmq library.
 
 For each round:
-1. Each worker update current model weight from master.
-2. Each worker has 3 concurrent environment (android emulator), and each plays 1 episode using the latest model weight.
-3. Each worker sends back 3 episode of data (~900 steps) to master.
-4. After all 9 * 3 = 27 episode of data is collected, the master use these data to train and update the model weight.
 
-## Low latency android emulation and control
-Using adb screencap and adb tap is slow. The latency is so large (~1 sec) that it isn't suitable for agents to train and to play games.
+1. Each worker updates the current model weights from the master.
+2. Each worker has 3 concurrent environments (Android emulators), and each plays 1 episode using the latest model weights.
+3. Each worker sends back 3 episodes of data (~900 steps) to the master.
+4. After all 9 × 3 = 27 episodes of data are collected, the master uses these data to train and update the model weights.
 
-We use scrcpy library, with custom python script as the middleman for scrcpy server and the agent.
+## Low-Latency Android Emulation and Control
 
-The sum of the round trip time for:
-1. Python script send input action
-2. Android emulator received action
-3. Android emulator reacts and screen changes 
-5. Python script received the updated screen
+Using adb screencap and adb tap is slow. The latency is very large (~1 second), which is not suitable for agents to train and play games.
 
-is averaging about 90 ms, and no more than 140 ms in 1000 tests.
+We use the scrcpy library with a custom Python script as the middleman between the scrcpy server and the agent.
 
-So setting the time step for our RL agent to be 150 ms is suitable.
+The total round-trip time for:
 
-## How latency round trip time is benchmarked
-1. We open tap counter website on the android emulator: https://samvlu.github.io/web-04-tap-counter/
-2. Python script to send tap action to tap the counter
-3. We continue to retrive the screen image, and check whether the number on the screen has changed
-4. We measure how much time has elapsed after we send the tap action
+1. The Python script sending an input action
+2. The Android emulator receiving the action
+3. The Android emulator reacting and the screen changing
+4. The Python script receiving the updated screen
 
-* We have set a threshold so that the noise won't be detected as number increase
-* We only send the next tap after the previous number increased
-* We saved screenshot to verify
-* We assume our bouncy basketball game is not less reactive than the chrome browser
+averages about 90 ms, and does not exceed 140 ms in 1000 tests.
 
-## How reward is retrived from the game screen
-In bouncy basketball game, it is like a real stadium, there is a TV showing a 2 point ball, a 3 point ball or a dunk is made.
+Therefore, setting the time step for our RL agent to 150 ms is suitable.
 
-After that the TV will show the possesion of the ball belongs to which team.
+## How the Latency Round-Trip Time Is Benchmarked
 
-So using these image matching on the TV, if we first detect a 3 point ball is made, and the next possesion belongs to blue team. Then we know that red team scores a 3 point ball.
+1. We open a tap counter website on the Android emulator: [https://samvlu.github.io/web-04-tap-counter/](https://samvlu.github.io/web-04-tap-counter/)
+2. A Python script sends tap actions to tap the counter.
+3. We continuously retrieve the screen image and check whether the number on the screen has changed.
+4. We measure how much time has elapsed after sending the tap action.
 
-If our agent is blue team, then the reward will be -3.
+* We set a threshold so that noise will not be detected as a number increase.
+* We only send the next tap after the previous number increases.
+* We save screenshots for verification.
+* We assume that our Bouncy Basketball game is at least as reactive as the Chrome browser.
 
-* Dunk showing on the TV is consider a 2 point
-* Besides 2 point ball, 3 point ball and dunk, there is also a buzzer beater, but our environment will omit it. So our agent won't receive any positive our a negative reward if buzzer beater happens.
+## How Rewards Are Retrieved from the Game Screen
 
-## How effective is our distributed system
-### Single cpu workstations scenario
-On cpu workstation, each episode takes 60 seconds, and a model update (10 epochs) takes 240 seconds.
+In Bouncy Basketball, the game resembles a real stadium, where a TV screen shows whether a 2-point shot, a 3-point shot, or a dunk is made.
 
-With 3 emulators, 27 episodes + model updates takes:
-9 * 60 + 240 = 780 seconds.
+After that, the TV shows which team gains possession of the ball.
 
-### 9 cpu workstations + 1 gpu workstation scenario
-On cpu workstation, each episode still takes 60 seconds.
-On gpu workstation, each model update takes 20 seconds.
+By using image matching on the TV screen, if we first detect that a 3-point shot is made and the next possession belongs to the blue team, then we know that the red team scored a 3-point shot.
 
-With 9 * 3 emulators, 27 episodes + model updates takes:
-60 + 20 = 80 seconds
+If our agent is on the blue team, then the reward will be -3.
 
-* We didn't measure the time to distribute data and model weights, and this should be done in the future.
+* A dunk shown on the TV is considered a 2-point score.
+* Besides 2-point shots, 3-point shots, and dunks, there is also a buzzer beater, but our environment ignores it. Therefore, our agent will not receive either a positive or negative reward if a buzzer beater happens.
+* Since the TV will display 1 second after the points are scored, the reward is a little bit delayed for training.
+
+## How Effective Our Distributed System Is
+
+### Single CPU Workstation Scenario
+
+On a CPU workstation, each episode takes 60 seconds, and a model update (10 epochs) takes 240 seconds.
+
+With 3 emulators, 27 episodes plus model updates take:
+9 × 60 + 240 = 780 seconds.
+
+### 9 CPU Workstations + 1 GPU Workstation Scenario
+
+On CPU workstations, each episode still takes 60 seconds.
+On the GPU workstation, each model update takes 20 seconds.
+
+With 9 × 3 emulators, 27 episodes plus model updates take:
+60 + 20 = 80 seconds.
+
+* We did not measure the time required to distribute data and model weights, and this should be done in the future.
