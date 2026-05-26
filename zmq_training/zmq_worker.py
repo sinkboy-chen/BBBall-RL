@@ -253,16 +253,31 @@ def run_persistent_env_for_rank(workstation_id, rank, emu, env, master_ip, push_
 
                 if mode == "evaluate":
                     # ── Deterministic Evaluation ──────────────────────────────
+                    from validate_env import VideoRecorder
+                    
+                    video_dir = f"/tmp2/{USER}/DRL_final_workspace/emulator_{emu.port}"
+                    os.makedirs(video_dir, exist_ok=True)
+                    video_path = os.path.join(video_dir, f"round_{round_idx}.mp4")
+                    
+                    print(f"[{device_serial}] Starting evaluation recording to {video_path}...")
+                    recorder = VideoRecorder(output_file=video_path, fps=30)
+                    recorder.set_client(env.client)
+                    recorder.start()
+                    
                     episode_reward = 0.0
                     episode_length = 0
 
-                    for step in range(1000):
-                        action, _ = model.predict(obs_dict, deterministic=True)
-                        obs_dict, reward, terminated, truncated, _ = env.step(action)
-                        episode_reward += reward
-                        episode_length += 1
-                        if terminated or truncated:
-                            break
+                    try:
+                        for step in range(1000):
+                            action, _ = model.predict(obs_dict, deterministic=True)
+                            obs_dict, reward, terminated, truncated, _ = env.step(action)
+                            episode_reward += reward
+                            episode_length += 1
+                            if terminated or truncated:
+                                break
+                    finally:
+                        recorder.stop()
+                        print(f"[{device_serial}] Evaluation recording stopped. Video saved to {video_path}")
 
                     push_socket.send_pyobj({
                         "event": "eval_report",

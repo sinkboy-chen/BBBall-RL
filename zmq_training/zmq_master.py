@@ -380,6 +380,12 @@ def main():
             # Serialize weights once at the start of the round
             weights_bytes = serialize_model(model)
             
+            # Track model weight distribution time
+            start_distribution_time = time.time()
+            workers_fetched = set()
+            distribution_logged = False
+            distribution_duration = 0.0
+            
             reports = []
             start_collect_time = time.time()
             grace_start_time = None
@@ -426,6 +432,15 @@ def main():
                                     "mode": mode,
                                     "weights": weights_bytes
                                 })
+                                # Track distribution time
+                                if req_round == round_idx:
+                                    w_id = msg.get("workstation")
+                                    if w_id and w_id not in workers_fetched:
+                                        workers_fetched.add(w_id)
+                                        if len(workers_fetched) == len(registered_workers) and not distribution_logged:
+                                            distribution_duration = time.time() - start_distribution_time
+                                            distribution_logged = True
+                                            print(f"[Sync] Model distributed to all {len(registered_workers)} workers in {distribution_duration:.4f} seconds.")
                     except Exception as e:
                         print(f"[!] ROUTER sync error: {e}")
                         
@@ -480,7 +495,8 @@ def main():
                         "eval/length_mean": eval_len_mean,
                         "eval/success_count": eval_count,
                         "eval/failed_count": total_envs - eval_count,
-                        "perf/data_collect_time_s": data_collect_time
+                        "perf/data_collect_time_s": data_collect_time,
+                        "perf/model_distribution_time_s": distribution_duration
                     }, step=round_idx)
                 else:
                     print("[!] Warning: All evaluation emulators failed or timed out!")
@@ -488,7 +504,8 @@ def main():
                         "round": round_idx,
                         "eval/success_count": 0,
                         "eval/failed_count": total_envs,
-                        "perf/data_collect_time_s": data_collect_time
+                        "perf/data_collect_time_s": data_collect_time,
+                        "perf/model_distribution_time_s": distribution_duration
                     }, step=round_idx)
                     
             else:  # "train" mode
@@ -534,6 +551,7 @@ def main():
                         "perf/data_collect_time_s": data_collect_time,
                         "perf/data_collect_rate_fps": data_collect_rate,
                         "perf/model_updating_time_s": model_updating_time,
+                        "perf/model_distribution_time_s": distribution_duration,
                         "train/loss": model.logger.name_to_value.get("train/loss", 0),
                         "train/policy_gradient_loss": model.logger.name_to_value.get("train/policy_gradient_loss", 0),
                         "train/value_loss": model.logger.name_to_value.get("train/value_loss", 0),
@@ -551,6 +569,7 @@ def main():
                         "env/total_steps_remaining": total_steps_remaining,
                         "perf/data_collect_time_s": data_collect_time,
                         "perf/data_collect_rate_fps": 0.0,
+                        "perf/model_distribution_time_s": distribution_duration,
                     }
                 
                 wandb.log(metrics, step=round_idx)
