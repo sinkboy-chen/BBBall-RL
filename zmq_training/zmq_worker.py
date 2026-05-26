@@ -608,6 +608,15 @@ def main():
             state_dict = torch.load(buffer, map_location="cpu")
             model.policy.load_state_dict(state_dict)
 
+            # ── 1.5. Periodic Sequential Reboot (Every 50 Rounds) ────────────
+            if master_round > 0 and master_round % 50 == 0:
+                print(f"\n[!] Round {master_round}: Periodic sequential reboot triggered for all active emulators...")
+                for rank in active_ranks:
+                    device_serial = f"emulator-{5554 + 2 * rank}"
+                    scrcpy_port = 27183 + rank
+                    reboot_emulator_and_scrcpy(emulators[rank], envs[rank], device_serial, scrcpy_port)
+                print(f"[+] All active emulators successfully rebooted and verified sequentially for round {master_round}!\n")
+
             # ── 2. Signal All Env Threads to Start ───────────────────────────
             for rank in active_ranks:
                 done_events[rank].clear()
