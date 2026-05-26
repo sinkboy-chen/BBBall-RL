@@ -227,6 +227,7 @@ def run_persistent_env_for_rank(workstation_id, rank, emu, env, master_ip, push_
             model = round_config["model"]
             mode = round_config["mode"]
             round_idx = round_config["round_idx"]
+            wandb_run_id = round_config.get("wandb_run_id", "offline_run")
 
             try:
                 print(f"[{device_serial}] Round {round_idx} starting ({mode.upper()})...")
@@ -255,7 +256,7 @@ def run_persistent_env_for_rank(workstation_id, rank, emu, env, master_ip, push_
                     # ── Deterministic Evaluation ──────────────────────────────
                     from validate_env import VideoRecorder
                     
-                    video_dir = f"/tmp2/{USER}/DRL_final_workspace/emulator_{emu.port}"
+                    video_dir = f"/tmp2/{USER}/DRL_final_workspace/{wandb_run_id}/emulator_{emu.port}"
                     os.makedirs(video_dir, exist_ok=True)
                     video_path = os.path.join(video_dir, f"round_{round_idx}.mp4")
                     
@@ -598,6 +599,7 @@ def main():
             master_round = reply.get("round", round_idx)
             mode = reply.get("mode", "train")
             weights = reply.get("weights")
+            wandb_run_id = reply.get("wandb_run_id", "offline_run")
 
             print(f"[*] Round {round_idx}: Model weights fetched (mode: {mode.upper()}, master round: {master_round})")
 
@@ -612,6 +614,7 @@ def main():
                 round_configs[rank]["model"] = model
                 round_configs[rank]["mode"] = mode
                 round_configs[rank]["round_idx"] = master_round
+                round_configs[rank]["wandb_run_id"] = wandb_run_id
 
             for rank in active_ranks:
                 start_events[rank].set()

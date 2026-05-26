@@ -430,7 +430,8 @@ def main():
                                     "status": "ok",
                                     "round": round_idx,
                                     "mode": mode,
-                                    "weights": weights_bytes
+                                    "weights": weights_bytes,
+                                    "wandb_run_id": run.id if run else "offline_run"
                                 })
                                 # Track distribution time
                                 if req_round == round_idx:
