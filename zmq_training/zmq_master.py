@@ -142,6 +142,7 @@ def main():
     parser.add_argument("--resume-latest", action="store_true", help="Auto-resume from latest checkpoint in models/")
     parser.add_argument("--wandb-project", type=str, default="bbball-rl-distributed")
     parser.add_argument("--wandb-run-id", type=str, default=None, help="WandB run ID to resume")
+    parser.add_argument("--start-round", type=int, default=None, help="Force start from a specific round index")
     
     parser.add_argument("--grace-timeout", type=float, default=10.0, help="Grace countdown duration in seconds")
     parser.add_argument("--global-timeout", type=float, default=120.0, help="Global collection timeout in seconds")
@@ -200,6 +201,12 @@ def main():
             except Exception as e:
                 print(f"[!] Warning: Failed to load checkpoint {path}. Error: {e}")
                 continue
+
+        if resume_path and not args.wandb_run_id:
+            parent_dir = os.path.basename(os.path.dirname(resume_path))
+            if parent_dir and parent_dir != "models":
+                args.wandb_run_id = parent_dir
+                print(f"[+] Auto-detected WandB Run ID from checkpoint directory: {args.wandb_run_id}")
 
         if model is None:
             if args.resume_from:
@@ -368,6 +375,10 @@ def main():
         if hasattr(model, "num_timesteps") and model.num_timesteps > 0:
             total_steps_trained = model.num_timesteps
             print(f"[+] Resumed: starting with cumulative steps {total_steps_trained:,}")
+
+    if args.start_round is not None:
+        round_idx = args.start_round
+        print(f"[+] Resumed override: starting from round {round_idx}")
     
     try:
         while round_idx < args.total_rounds and total_steps_trained < args.total_steps:
@@ -582,7 +593,9 @@ def main():
                 
             # ── Checkpointing ─────────────────────────────────────────────────
             if round_idx % 10 == 0:
-                chk_path = os.path.join(CHECKPOINT_DIR, f"bbball_ppo_round_{round_idx}")
+                run_checkpoint_dir = os.path.join(CHECKPOINT_DIR, run.id if run else "offline_run")
+                os.makedirs(run_checkpoint_dir, exist_ok=True)
+                chk_path = os.path.join(run_checkpoint_dir, f"bbball_ppo_round_{round_idx}")
                 model.save(chk_path)
                 print(f"[*] Checkpoint saved: {chk_path}.zip")
                 
@@ -591,7 +604,9 @@ def main():
     except KeyboardInterrupt:
         print("\n[!] Ctrl+C detected on Master. Saving final checkpoint...")
     finally:
-        final_chk_path = os.path.join(CHECKPOINT_DIR, "bbball_ppo_final")
+        run_checkpoint_dir = os.path.join(CHECKPOINT_DIR, run.id if run else "offline_run")
+        os.makedirs(run_checkpoint_dir, exist_ok=True)
+        final_chk_path = os.path.join(run_checkpoint_dir, "bbball_ppo_final")
         model.save(final_chk_path)
         print(f"[*] Final model saved: {final_chk_path}.zip")
         
